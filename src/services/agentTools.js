@@ -150,6 +150,28 @@ const tools = {
   },
 
   /**
+   * Delete or clear assignments/deadlines when the user asks to remove them
+   */
+  async remove_assignment({ course_code, remove_all = false }) {
+    let query = supabase.from('assignments').delete();
+    if (remove_all) {
+      query = query.neq('id', '00000000-0000-0000-0000-000000000000'); // delete all
+    } else if (course_code) {
+      query = query.ilike('course_code', `%${course_code.toUpperCase()}%`);
+    } else {
+      // delete the latest one
+      const { data: latest } = await supabase.from('assignments').select('id').order('created_at', { ascending: false }).limit(1);
+      if (latest && latest[0]) {
+        query = query.eq('id', latest[0].id);
+      }
+    }
+
+    const { data, error } = await query.select();
+    if (error) return { error: error.message };
+    return { success: true, removed_count: data?.length || 0 };
+  },
+
+  /**
    * Search past messages, announcements, deadlines, payments, and reactions
    */
   async query_context({ person_name, course_code, group_name, query_type = 'general' }) {
