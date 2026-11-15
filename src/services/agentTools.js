@@ -62,9 +62,66 @@ const tools = {
   },
 
   /**
+   * Update the owner's personal preferences (preferred name, response formatting style)
+   */
+  async update_user_preference({ user_name, formatting_style }) {
+    const { data: prefRow } = await supabase
+      .from('monitored_chats')
+      .select('name')
+      .eq('chat_id', 'user_preferences')
+      .maybeSingle();
+
+    let current = { user_name: 'Noble', formatting_style: 'double_newline' };
+    if (prefRow && prefRow.name) {
+      try { current = JSON.parse(prefRow.name); } catch (e) {}
+    }
+
+    if (user_name) current.user_name = user_name.trim();
+    if (formatting_style) current.formatting_style = formatting_style.trim();
+
+    const { data, error } = await supabase
+      .from('monitored_chats')
+      .upsert({
+        chat_id: 'user_preferences',
+        name: JSON.stringify(current),
+        is_active: false
+      })
+      .select();
+
+    const ownerPhone = process.env.USER_PHONE_NUMBER || '2349150573885';
+    if (user_name) {
+      await supabase.from('contacts').upsert({
+        phone_number: ownerPhone,
+        display_name: current.user_name,
+        role: 'owner',
+        trusted_for_class_changes: true
+      });
+    }
+
+    if (error) return { error: error.message };
+    return { success: true, preferences: current };
+  },
+
+  /**
    * Monitor or link groups (e.g. class group, youth group, crew group)
    */
   async configure_group({ chat_id, name, linked_to_group_name }) {
+    let targetChatId = chat_id;
+
+    // If chat_id not provided, automatically bind to the most recent group chat discovered
+    if (!targetChatId) {
+      const { data: recentGroupMsg } = await supabase
+        .from('raw_messages')
+        .select('chat_id')
+        .ilike('chat_id', '%@g.us%')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (recentGroupMsg && recentGroupMsg.chat_id) {
+        targetChatId = recentGroupMsg.chat_id;
+      }
+    }
+
     let linked_chat_id = null;
     if (linked_to_group_name) {
       const { data: parent } = await supabase
@@ -78,7 +135,7 @@ const tools = {
     const { data, error } = await supabase
       .from('monitored_chats')
       .upsert({
-        chat_id: chat_id || `group_${Date.now()}`,
+        chat_id: targetChatId || `group_${Date.now()}`,
         name: name,
         is_active: true,
         linked_chat_id

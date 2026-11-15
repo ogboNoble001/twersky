@@ -4,32 +4,36 @@ const { sendTextMessage } = require('./waha');
 const supabase = require('../db/client');
 
 /**
- * System prompt defining Twersky's core rules, tool capability, and exact personality.
+ * Builds the dynamic system prompt customized to the owner's preferred name and style.
  */
-const ORCHESTRATOR_SYSTEM_PROMPT = `You are Twersky, an intelligent, connected academic personal assistant running on WhatsApp for your owner.
+function buildSystemPrompt(userName = 'Noble', formattingStyle = 'double_newline') {
+  return `You are Twersky, an intelligent, connected academic personal assistant running on WhatsApp for your owner, ${userName}.
 
-COMMUNICATION & FORMAT RULES (MANDATORY):
-1. LINE BREAK RULE: You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).
-   Example format:
-   First sentence goes here.
-
-   Second sentence goes here.
-
-   Third sentence goes here.
+COMMUNICATION & PERSONALITY:
+1. ADDRESSING YOUR OWNER:
+   - Your owner's name is ${userName}. Naturally address them as ${userName} in your replies when appropriate.
+   - If ${userName} tells you to call them by another name, or asks to change their name or formatting style, use the update_user_preference tool immediately.
 
 2. STYLE & PERSONALITY:
    - Standard natural sentence case (proper capitalization and punctuation).
-   - Friendly, conversational, smart, and direct.
-   - No emojis, no markdown bullet lists, no asterisks (**bold**), and no links.
+   - Friendly, conversational, smart, attentive, and direct.
+   - No emojis, no markdown bullet lists, no asterisks (**bold**), and no external links.
    - Always state who said what, and explicitly call out missing details as "not stated" or "he didn't give the exact time".
 
-3. REAL ANSWERS OVER INTENTS:
-   - When asked a question (e.g. "which groups do we have", "what deadlines do we have"), you MUST return the actual answer based on the context and tool results.
+3. FORMATTING RULE:
+   ${formattingStyle === 'double_newline' 
+     ? 'You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' 
+     : 'Use standard natural paragraph breaks as requested by ' + userName + '.'}
+
+4. REAL ANSWERS OVER INTENTS:
+   - When asked a question (e.g. "which groups do we have", "what deadlines do we have", "what was said"), you MUST return the actual answer based on the real tool results and context.
+   - If asked about groups, list any active monitored groups AND any discovered WhatsApp groups where messages are arriving.
    - NEVER return placeholder promises like "I will look into that" or "I will query the context to see". Give the final answer directly.`;
+}
 
 /**
  * Executes a two-step agent loop:
- * Step 1: LLM decides what tools to call (e.g. query_context)
+ * Step 1: LLM decides what tools to call (e.g. query_context, update_user_preference)
  * Step 2: Tools are executed, and LLM generates the final answer based on the real tool results!
  * @param {object} payload - Incoming WAHA message payload
  */
@@ -40,13 +44,55 @@ async function orchestrateUserCommand(payload) {
   console.log(`[Orchestrator] Invoking agent for: "${userText}"`);
 
   try {
-    // 1. Gather baseline context
-    const { data: contacts } = await supabase.from('contacts').select('display_name, role, phone_number').limit(5);
-    const { data: recentAssignments } = await supabase.from('assignments').select('course_code, title, deadline_text, status').order('created_at', { ascending: false }).limit(5);
-    const { data: monitoredGroups } = await supabase.from('monitored_chats').select('name, chat_id, is_active');
+    // 1. Fetch user preferences (name, formatting style)
+    const { data: prefRow } = await supabase
+      .from('monitored_chats')
+      .select('name')
+      .eq('chat_id', 'user_preferences')
+      .maybeSingle();
+
+    let userPreferences = { user_name: 'Noble', formatting_style: 'double_newline' };
+    if (prefRow && prefRow.name) {
+      try {
+        userPreferences = { ...userPreferences, ...JSON.parse(prefRow.name) };
+      } catch (e) {}
+    }
+
+    const userName = userPreferences.user_name || 'Noble';
+    const formattingStyle = userPreferences.formatting_style || 'double_newline';
+    const systemPrompt = buildSystemPrompt(userName, formattingStyle);
+
+    // 2. Gather baseline context
+    const { data: contacts } = await supabase
+      .from('contacts')
+      .select('display_name, role, phone_number')
+      .limit(10);
+
+    const { data: recentAssignments } = await supabase
+      .from('assignments')
+      .select('course_code, title, deadline_text, status')
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    const { data: monitoredGroups } = await supabase
+      .from('monitored_chats')
+      .select('name, chat_id, is_active')
+      .eq('is_active', true);
+
+    // Discovered WhatsApp group chats in raw_messages
+    const { data: rawGroupMsgs } = await supabase
+      .from('raw_messages')
+      .select('chat_id')
+      .ilike('chat_id', '%@g.us%')
+      .limit(50);
+
+    const discoveredGroupIds = [...new Set((rawGroupMsgs || []).map(m => m.chat_id))];
 
     const baselineContext = {
-      monitored_groups: monitoredGroups || [],
+      owner_name: userName,
+      user_preferences: userPreferences,
+      active_monitored_groups: monitoredGroups || [],
+      discovered_unmonitored_groups: discoveredGroupIds || [],
       known_contacts: contacts || [],
       recent_assignments: recentAssignments || []
     };
@@ -59,15 +105,16 @@ User's WhatsApp Message:
 "${userText}"
 
 Available tools:
-1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if user says "save that number as [name]" referring to recent message)
+1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if referring to recent message)
 2. delete_contact: { display_name, phone_number } (use when user asks to delete or remove a contact)
-3. configure_group: { chat_id, name, linked_to_group_name }
-4. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
-5. set_reminder: { course_code, topic, interval_minutes, scheduled_time, quiet_hours_start, quiet_hours_end }
-6. update_class_status: { course_code, is_cancelled, reason }
-7. stop_reminders: { course_code }
-8. remove_assignment: { course_code, remove_all }
-9. query_context: { person_name, course_code, group_name }
+3. update_user_preference: { user_name, formatting_style } (use when user says "call me [name]", "my name is [name]", or requests a formatting style change)
+4. configure_group: { chat_id, name, linked_to_group_name } (omit chat_id if binding the latest discovered group)
+5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
+6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, quiet_hours_start, quiet_hours_end }
+7. update_class_status: { course_code, is_cancelled, reason }
+8. stop_reminders: { course_code }
+9. remove_assignment: { course_code, remove_all }
+10. query_context: { person_name, course_code, group_name }
 
 Output strictly JSON:
 {
@@ -77,7 +124,7 @@ Output strictly JSON:
   ]
 }`;
 
-    const step1Decision = await callLLM(ORCHESTRATOR_SYSTEM_PROMPT, step1Prompt);
+    const step1Decision = await callLLM(systemPrompt, step1Prompt);
     console.log('[Orchestrator] Step 1 Decision:', step1Decision.thought);
 
     // Execute tool calls and capture results
@@ -106,21 +153,24 @@ ${JSON.stringify(executionResults, null, 2)}
 User's Original Message:
 "${userText}"
 
-Generate the final response directly to the user.
-Remember the formatting rule: You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).
+Generate the final response directly to ${userName}.
+Address ${userName} naturally.
+Formatting rule: ${formattingStyle === 'double_newline' ? 'Insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' : 'Use clean natural formatting.'}
 Output strictly JSON:
 {
-  "response": "Your full response to the user with a blank line between each sentence"
+  "response": "Your full response directly to ${userName}"
 }`;
 
-    const step2Result = await callLLM(ORCHESTRATOR_SYSTEM_PROMPT, step2Prompt);
-    let finalReply = step2Result.response || 'I have noted that.';
+    const step2Result = await callLLM(systemPrompt, step2Prompt);
+    let finalReply = step2Result.response || `I have noted that, ${userName}.`;
 
-    // Clean up spacing to guarantee double newlines between sentences if needed
-    finalReply = finalReply
-      .replace(/([.?!])\s+(?=[A-Z])/g, '$1\n\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+    if (formattingStyle === 'double_newline') {
+      // Clean up spacing to guarantee double newlines between sentences
+      finalReply = finalReply
+        .replace(/([.?!])\s+(?=[A-Z])/g, '$1\n\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
 
     await sendTextMessage(from, finalReply);
 
