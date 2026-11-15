@@ -4,6 +4,9 @@ const supabase = require('../db/client');
 const { isAuthorizedUser } = require('../utils/helpers');
 const { orchestrateUserCommand } = require('../services/agentOrchestrator');
 
+// In-memory cache to prevent duplicate webhook delivery within 10 seconds
+const processedMessageIds = new Set();
+
 // WAHA Webhook Receiver
 router.post('/whatsapp', async (req, res) => {
   try {
@@ -18,7 +21,6 @@ router.post('/whatsapp', async (req, res) => {
       return res.status(200).json({ status: 'ignored_event' });
     }
 
-    // Destructure message fields from WAHA payload
     const {
       id: messageId,
       from,             // JID of chat (can be group e.g. 123@g.us or user 234...@c.us or @lid)
@@ -30,9 +32,20 @@ router.post('/whatsapp', async (req, res) => {
       timestamp
     } = payload;
 
-    // Rule: Ignore the bot's own outgoing messages
+    // Rule 1: Ignore the bot's own outgoing messages
     if (fromMe) {
       return res.status(200).json({ status: 'ignored_self_message' });
+    }
+
+    // Rule 2: Strict Deduplication Guard
+    if (messageId) {
+      if (processedMessageIds.has(messageId)) {
+        console.log(`[Webhook] Duplicate event for message ${messageId} ignored.`);
+        return res.status(200).json({ status: 'ignored_duplicate' });
+      }
+      processedMessageIds.add(messageId);
+      // Auto-expire from cache after 15 seconds
+      setTimeout(() => processedMessageIds.delete(messageId), 15000);
     }
 
     const actualSender = sender || from;
