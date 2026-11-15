@@ -233,12 +233,31 @@ const tools = {
 
     if (target_date) {
       const str = target_date.toLowerCase().trim();
-      const numMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+      const numMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+
+      // "in X months" / "in four months time" / "next two months"
+      const monthsMatch = str.match(/(?:in\s+(?:the\s+next\s+)?|next\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+months?(?:\s+(?:time|from\s+now))?/i);
+      if (monthsMatch) {
+        const count = parseInt(monthsMatch[1]) || numMap[monthsMatch[1].toLowerCase()] || 1;
+        nextRun.setMonth(nextRun.getMonth() + count);
+        nextRun.setHours(9, 0, 0, 0);
+
+      // "next week" (plain — must come before the weeks regex so "next week" isn't swallowed)
+      } else if (/^next\s+week$/.test(str) || str === 'next week') {
+        nextRun.setDate(nextRun.getDate() + 7);
+        nextRun.setHours(9, 0, 0, 0);
+
+      // "in X weeks" / "next two weeks" / "in the next X weeks"
+      } else if (str.match(/(?:in\s+(?:the\s+next\s+)?|next\s+)?(\d+|one|two|three|four|five|six|seven|eight)\s+weeks?(?:\s+(?:time|from\s+now))?/i)) {
+        const wMatch = str.match(/(?:in\s+(?:the\s+next\s+)?|next\s+)?(\d+|one|two|three|four|five|six|seven|eight)\s+weeks?/i);
+        const count = parseInt(wMatch[1]) || numMap[wMatch[1].toLowerCase()] || 1;
+        nextRun.setDate(nextRun.getDate() + count * 7);
+        nextRun.setHours(9, 0, 0, 0);
 
       // "in X days" / "in the next X days" / "X days from now"
-      const daysMatch = str.match(/(?:in\s+(?:the\s+next\s+)?)?(\d+|one|two|three|four|five|six|seven)\s+days?(?:\s+from\s+now)?/i);
-      if (daysMatch) {
-        const count = parseInt(daysMatch[1]) || numMap[daysMatch[1].toLowerCase()] || 2;
+      } else if (str.match(/(?:in\s+(?:the\s+next\s+)?)?(\d+|one|two|three|four|five|six|seven)\s+days?(?:\s+from\s+now)?/i)) {
+        const dMatch = str.match(/(?:in\s+(?:the\s+next\s+)?)?(\d+|one|two|three|four|five|six|seven)\s+days?(?:\s+from\s+now)?/i);
+        const count = parseInt(dMatch[1]) || numMap[dMatch[1].toLowerCase()] || 2;
         nextRun.setDate(nextRun.getDate() + count);
         nextRun.setHours(9, 0, 0, 0);
 
@@ -259,11 +278,6 @@ const tools = {
         const daysUntilSunday = (7 - day) % 7 || 7;
         nextRun.setDate(nextRun.getDate() + daysUntilSunday);
         nextRun.setHours(12, 0, 0, 0);
-
-      // "next week"
-      } else if (str.includes('next week')) {
-        nextRun.setDate(nextRun.getDate() + 7);
-        nextRun.setHours(9, 0, 0, 0);
 
       // ISO / standard date string
       } else {
