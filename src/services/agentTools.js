@@ -218,9 +218,27 @@ const tools = {
   /**
    * Schedule or update a reminder
    */
-  async set_reminder({ course_code, topic, interval_minutes, scheduled_time, quiet_hours_start, quiet_hours_end }) {
-    const nextRun = new Date();
-    nextRun.setMinutes(nextRun.getMinutes() + (interval_minutes || 60));
+  async set_reminder({ course_code, topic, interval_minutes, scheduled_time, target_date }) {
+    let nextRun = new Date();
+
+    if (target_date) {
+      const lower = target_date.toLowerCase();
+      if (lower.includes('weekend') || lower.includes('sunday') || lower.includes('saturday')) {
+        const day = nextRun.getDay();
+        const daysUntilSunday = (7 - day) % 7 || 7;
+        nextRun.setDate(nextRun.getDate() + daysUntilSunday);
+        nextRun.setHours(12, 0, 0, 0); // Sunday noon
+      } else {
+        const parsed = new Date(target_date);
+        if (!isNaN(parsed.getTime())) {
+          nextRun = parsed;
+        } else {
+          nextRun.setMinutes(nextRun.getMinutes() + (interval_minutes || 60));
+        }
+      }
+    } else {
+      nextRun.setMinutes(nextRun.getMinutes() + (interval_minutes || 60));
+    }
 
     const { data, error } = await supabase
       .from('reminders')
@@ -229,8 +247,6 @@ const tools = {
         topic: topic || 'Review deadline',
         interval_minutes: interval_minutes || 60,
         scheduled_times: scheduled_time ? [scheduled_time] : null,
-        quiet_hours_start: quiet_hours_start || '23:00:00',
-        quiet_hours_end: quiet_hours_end || '06:00:00',
         next_run_at: nextRun.toISOString()
       })
       .select();

@@ -11,7 +11,8 @@ function buildSystemPrompt(userName = 'Noble', formattingStyle = 'double_newline
 
 COMMUNICATION & PERSONALITY:
 1. ADDRESSING YOUR OWNER:
-   - Your owner's name is ${userName}. Naturally address them as ${userName} in your replies when appropriate.
+   - Your owner's name is ${userName}.
+   - Do NOT overuse or repeatedly insert their name into every response. Use it sparingly and naturally (e.g. at the start of a greeting or an important alert), never awkwardly or robotically.
    - If ${userName} tells you to call them by another name, or asks to change their name or formatting style, use the update_user_preference tool immediately.
 
 2. STYLE & PERSONALITY:
@@ -31,12 +32,18 @@ COMMUNICATION & PERSONALITY:
    - When ${userName} switches to a new subject, course code, or person, transition smoothly to the new context.
    - When ${userName} asks what was said in a group (e.g. "what was the last message there", "the last message from the group"), you MUST invoke query_context with the group_name to retrieve the real announcement!
 
-5. FORMATTING RULE:
+5. PROACTIVE ACADEMIC FOLLOW-UPS & PREPARATION REMINDERS:
+   - When an announcement or course requirement mentions lectures or deadlines starting "next week" or requiring early preparation (for example, GET 307 Python fundamentals):
+     a) State the announcement details and what preparation is required.
+     b) Schedule a preparatory reminder for the upcoming weekend using set_reminder({ course_code, topic, target_date: 'this weekend' }) so ${userName} is reminded before lectures start.
+     c) Explicitly tell ${userName} that you have scheduled this weekend reminder for them.
+
+6. FORMATTING RULE:
    ${formattingStyle === 'double_newline' 
      ? 'You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' 
      : 'Use standard natural paragraph breaks as requested by ' + userName + '.'}
 
-6. REAL ANSWERS OVER INTENTS:
+7. REAL ANSWERS OVER INTENTS:
    - When asked a question, you MUST return the actual answer based on the real tool results and context.
    - NEVER return placeholder promises like "I will look into that" or "I will query the context to see". Give the final answer directly.`;
 }
@@ -137,7 +144,7 @@ Available tools:
 3. update_user_preference: { user_name, formatting_style } (use when user says "call me [name]", "my name is [name]", or requests a formatting style change)
 4. configure_group: { chat_id, name, linked_to_group_name } (binds group by name e.g. "OFFICIAL COMPUTER ENGINEERING 300LVL")
 5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
-6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, quiet_hours_start, quiet_hours_end }
+6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (use target_date: 'this weekend' to schedule weekend preparatory reminders)
 7. stop_reminders: { course_code } (use when user says "stop", pauses reminders without marking assignment completed)
 8. mark_assignment_done: { course_code, title } (use when user says "done", "submitted", marks assignment completed and resolves reminders)
 9. update_class_status: { course_code, is_cancelled, reason }
