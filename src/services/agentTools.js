@@ -150,43 +150,52 @@ const tools = {
   },
 
   /**
-   * Search past messages, announcements, and reactions
+   * Search past messages, announcements, deadlines, payments, and reactions
    */
-  async query_context({ person_name, course_code, group_name }) {
+  async query_context({ person_name, course_code, group_name, query_type = 'general' }) {
     const results = {};
 
-    if (person_name) {
-      const { data: contact } = await supabase
-        .from('contacts')
-        .select('*')
-        .ilike('display_name', `%${person_name}%`)
-        .maybeSingle();
+    // 1. Fetch relevant announcements or messages
+    let msgQuery = supabase
+      .from('raw_messages')
+      .select('body, sender_name, timestamp, created_at, chat_id')
+      .order('timestamp', { ascending: false })
+      .limit(20);
 
-      if (contact) {
-        const { data: msgs } = await supabase
-          .from('raw_messages')
-          .select('body, timestamp')
-          .eq('sender_id', contact.phone_number)
-          .order('timestamp', { ascending: false })
-          .limit(10);
-        results.person_messages = msgs;
+    if (group_name) {
+      // Find group chat_id if monitored
+      const { data: group } = await supabase
+        .from('monitored_chats')
+        .select('chat_id')
+        .ilike('name', `%${group_name}%`)
+        .maybeSingle();
+      if (group) {
+        msgQuery = msgQuery.eq('chat_id', group.chat_id);
       }
     }
 
-    if (course_code) {
-      const { data: assignments } = await supabase
-        .from('assignments')
-        .select('*')
-        .ilike('course_code', `%${course_code.toUpperCase()}%`)
-        .order('created_at', { ascending: false });
-      results.assignments = assignments;
+    const { data: messages } = await msgQuery;
+    results.recent_group_messages = messages || [];
 
-      const { data: timetable } = await supabase
-        .from('timetable_entries')
-        .select('*')
-        .ilike('course_code', `%${course_code.toUpperCase()}%`);
-      results.timetable = timetable;
-    }
+    // 2. Fetch all current deadlines & assignments
+    const { data: assignments } = await supabase
+      .from('assignments')
+      .select('*')
+      .order('created_at', { ascending: false });
+    results.assignments = assignments || [];
+
+    // 3. Fetch active reminders
+    const { data: reminders } = await supabase
+      .from('reminders')
+      .select('*')
+      .eq('is_stopped', false);
+    results.active_reminders = reminders || [];
+
+    // 4. Fetch timetable
+    const { data: timetable } = await supabase
+      .from('timetable_entries')
+      .select('*');
+    results.timetable = timetable || [];
 
     return results;
   }
