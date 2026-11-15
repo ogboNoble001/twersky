@@ -6,8 +6,7 @@ const supabase = require('../db/client');
 /**
  * System prompt defining Twersky's core rules, tool capability, and exact personality.
  */
-const ORCHESTRATOR_SYSTEM_PROMPT = `You are Twersky, an intelligent, non-deterministic academic personal assistant running on WhatsApp for your owner.
-You act as one unified, fully-connected brain that knows what is happening across official groups, private chats, timetables, deadlines, and reminders.
+const ORCHESTRATOR_SYSTEM_PROMPT = `You are Twersky, an intelligent, connected academic personal assistant running on WhatsApp for your owner.
 
 COMMUNICATION & FORMAT RULES (MANDATORY):
 1. LINE BREAK RULE: You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).
@@ -18,15 +17,46 @@ COMMUNICATION & FORMAT RULES (MANDATORY):
 
    Third sentence goes here.
 
-2. DIRECT ACTION OVER UNNECESSARY QUESTIONS:
-   - When the user asks to "remove it", "delete it", or "cancel it", do NOT ask repetitive confirmation questions if the context already makes it obvious (e.g. if there is only one pending assignment or course like GT 301, immediately execute the removal/cancellation tool and report that it has been removed).
-   - If they say "like all the deadlines" or "remove it", remove the relevant items directly.
-
-3. STYLE:
+2. STYLE & PERSONALITY:
    - Standard natural sentence case (proper capitalization and punctuation).
    - Friendly, conversational, smart, and direct.
    - No emojis, no markdown bullet lists, no asterisks (**bold**), and no links.
    - Always state who said what, and explicitly call out missing details as "not stated" or "he didn't give the exact time".
+
+3. REAL ANSWERS OVER INTENTS:
+   - When asked a question (e.g. "which groups do we have", "what deadlines do we have"), you MUST return the actual answer based on the context and tool results.
+   - NEVER return placeholder promises like "I will look into that" or "I will query the context to see". Give the final answer directly.`;
+
+/**
+ * Executes a two-step agent loop:
+ * Step 1: LLM decides what tools to call (e.g. query_context)
+ * Step 2: Tools are executed, and LLM generates the final answer based on the real tool results!
+ * @param {object} payload - Incoming WAHA message payload
+ */
+async function orchestrateUserCommand(payload) {
+  const { from, body } = payload;
+  const userText = (body || '').trim();
+
+  console.log(`[Orchestrator] Invoking agent for: "${userText}"`);
+
+  try {
+    // 1. Gather baseline context
+    const { data: contacts } = await supabase.from('contacts').select('display_name, role, phone_number').limit(5);
+    const { data: recentAssignments } = await supabase.from('assignments').select('course_code, title, deadline_text, status').order('created_at', { ascending: false }).limit(5);
+    const { data: monitoredGroups } = await supabase.from('monitored_chats').select('name, chat_id, is_active');
+
+    const baselineContext = {
+      monitored_groups: monitoredGroups || [],
+      known_contacts: contacts || [],
+      recent_assignments: recentAssignments || []
+    };
+
+    // Step 1: Decision on tool calling
+    const step1Prompt = `System Context:
+${JSON.stringify(baselineContext, null, 2)}
+
+User's WhatsApp Message:
+"${userText}"
 
 Available tools:
 1. save_contact: { phone_number, display_name, role, trusted_for_class_changes }
@@ -38,76 +68,64 @@ Available tools:
 7. remove_assignment: { course_code, remove_all }
 8. query_context: { person_name, course_code, group_name }
 
-Output format:
-Always return valid JSON matching:
+Output strictly JSON:
 {
-  "thought": "your chain-of-thought reasoning over context, tools to invoke, and response phrasing",
+  "thought": "what tools need to be called to answer or fulfill this request",
   "tool_calls": [
-    {
-      "name": "tool_name",
-      "args": { ... }
-    }
-  ],
-  "response": "the natural formatted response with double newlines between paragraphs"
+    { "name": "tool_name", "args": { ... } }
+  ]
 }`;
 
-/**
- * Executes the LLM orchestration loop for an incoming user message
- * @param {object} payload - Incoming WAHA message payload
- */
-async function orchestrateUserCommand(payload) {
-  const { from, body } = payload;
-  const userText = (body || '').trim();
+    const step1Decision = await callLLM(ORCHESTRATOR_SYSTEM_PROMPT, step1Prompt);
+    console.log('[Orchestrator] Step 1 Decision:', step1Decision.thought);
 
-  console.log(`[Orchestrator] Invoking agent for: "${userText}"`);
-
-  try {
-    // 1. Gather immediate recent context from database to pass to the model
-    const { data: contacts } = await supabase.from('contacts').select('display_name, role, phone_number').limit(5);
-    const { data: recentAssignments } = await supabase.from('assignments').select('course_code, title, deadline_text, status').order('created_at', { ascending: false }).limit(5);
-    const { data: activeReminders } = await supabase.from('reminders').select('course_code, topic, interval_minutes, is_stopped').eq('is_stopped', false).limit(5);
-
-    const contextSummary = {
-      known_contacts: contacts || [],
-      recent_assignments: recentAssignments || [],
-      active_reminders: activeReminders || []
-    };
-
-    const prompt = `Current Context:
-${JSON.stringify(contextSummary, null, 2)}
-
-User's Incoming WhatsApp Message:
-"${userText}"
-
-Decide the appropriate tool calls (if any) and your plain lowercase response.`;
-
-    const decision = await callLLM(ORCHESTRATOR_SYSTEM_PROMPT, prompt);
-
-    console.log('[Orchestrator] Decision:', decision.thought);
-
-    // 2. Execute any selected tool calls
-    if (Array.isArray(decision.tool_calls) && decision.tool_calls.length > 0) {
-      for (const call of decision.tool_calls) {
+    // Execute tool calls and capture results
+    const executionResults = [];
+    if (Array.isArray(step1Decision.tool_calls) && step1Decision.tool_calls.length > 0) {
+      for (const call of step1Decision.tool_calls) {
         const toolFn = tools[call.name];
         if (toolFn) {
-          console.log(`[Orchestrator] Executing tool: ${call.name} with args:`, call.args);
           try {
-            const toolResult = await toolFn(call.args);
-            console.log(`[Orchestrator] Tool ${call.name} result:`, toolResult);
-          } catch (toolErr) {
-            console.error(`[Orchestrator] Tool execution error for ${call.name}:`, toolErr.message);
+            const result = await toolFn(call.args);
+            executionResults.push({ tool: call.name, args: call.args, result });
+          } catch (e) {
+            executionResults.push({ tool: call.name, error: e.message });
           }
         }
       }
     }
 
-    // 3. Send final natural response to the user with normal capitalization and line spacing
-    const textReply = decision.response || 'Got it.';
-    await sendTextMessage(from, textReply.trim());
+    // Step 2: Generate the final direct response using the tool execution results
+    const step2Prompt = `System Context:
+${JSON.stringify(baselineContext, null, 2)}
+
+Tool Execution Results:
+${JSON.stringify(executionResults, null, 2)}
+
+User's Original Message:
+"${userText}"
+
+Generate the final response directly to the user.
+Remember the formatting rule: You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).
+Output strictly JSON:
+{
+  "response": "Your full response to the user with a blank line between each sentence"
+}`;
+
+    const step2Result = await callLLM(ORCHESTRATOR_SYSTEM_PROMPT, step2Prompt);
+    let finalReply = step2Result.response || 'I have noted that.';
+
+    // Clean up spacing to guarantee double newlines between sentences if needed
+    finalReply = finalReply
+      .replace(/([.?!])\s+(?=[A-Z])/g, '$1\n\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    await sendTextMessage(from, finalReply);
 
   } catch (err) {
     console.error('[Orchestrator] Agent execution failed:', err);
-    await sendTextMessage(from, 'I ran into a temporary connection issue while checking that.\n\nPlease ask me again.');
+    await sendTextMessage(from, 'I ran into a temporary issue while checking that.\n\nPlease ask me again.');
   }
 }
 
