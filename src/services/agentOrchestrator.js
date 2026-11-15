@@ -59,14 +59,15 @@ User's WhatsApp Message:
 "${userText}"
 
 Available tools:
-1. save_contact: { phone_number, display_name, role, trusted_for_class_changes }
-2. configure_group: { chat_id, name, linked_to_group_name }
-3. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
-4. set_reminder: { course_code, topic, interval_minutes, scheduled_time, quiet_hours_start, quiet_hours_end }
-5. update_class_status: { course_code, is_cancelled, reason }
-6. stop_reminders: { course_code }
-7. remove_assignment: { course_code, remove_all }
-8. query_context: { person_name, course_code, group_name }
+1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if user says "save that number as [name]" referring to recent message)
+2. delete_contact: { display_name, phone_number } (use when user asks to delete or remove a contact)
+3. configure_group: { chat_id, name, linked_to_group_name }
+4. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
+5. set_reminder: { course_code, topic, interval_minutes, scheduled_time, quiet_hours_start, quiet_hours_end }
+6. update_class_status: { course_code, is_cancelled, reason }
+7. stop_reminders: { course_code }
+8. remove_assignment: { course_code, remove_all }
+9. query_context: { person_name, course_code, group_name }
 
 Output strictly JSON:
 {

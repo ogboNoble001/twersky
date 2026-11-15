@@ -9,8 +9,23 @@ const tools = {
    * Label a phone number/contact with a name and academic role
    */
   async save_contact({ phone_number, display_name, role, trusted_for_class_changes = false }) {
-    const cleanPhone = (phone_number || '').replace(/[^0-9]/g, '');
-    if (!cleanPhone) return { error: 'Invalid phone number provided' };
+    let cleanPhone = (phone_number || '').replace(/[^0-9]/g, '');
+
+    // If phone number is omitted (e.g. user says "save that number as Wisdom"), grab sender from latest raw message
+    if (!cleanPhone) {
+      const { data: latestMsg } = await supabase
+        .from('raw_messages')
+        .select('sender_id')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestMsg && latestMsg.sender_id) {
+        cleanPhone = latestMsg.sender_id.replace(/[^0-9]/g, '');
+      }
+    }
+
+    if (!cleanPhone) return { error: 'No phone number provided and no recent messages found.' };
 
     const { data, error } = await supabase
       .from('contacts')
@@ -24,6 +39,26 @@ const tools = {
 
     if (error) return { error: error.message };
     return { success: true, contact: data[0] };
+  },
+
+  /**
+   * Delete or remove a stored contact by name or phone number
+   */
+  async delete_contact({ display_name, phone_number }) {
+    let query = supabase.from('contacts').delete();
+
+    if (display_name) {
+      query = query.ilike('display_name', `%${display_name.trim()}%`);
+    } else if (phone_number) {
+      const cleanPhone = phone_number.replace(/[^0-9]/g, '');
+      query = query.ilike('phone_number', `%${cleanPhone}%`);
+    } else {
+      return { error: 'Please specify the name or phone number of the contact to delete.' };
+    }
+
+    const { data, error } = await query.select();
+    if (error) return { error: error.message };
+    return { success: true, deleted: data };
   },
 
   /**
@@ -197,7 +232,28 @@ const tools = {
     }
 
     const { data: messages } = await msgQuery;
-    results.recent_group_messages = messages || [];
+
+    // Fetch known contacts and resolve sender numbers to names
+    const { data: allContacts } = await supabase.from('contacts').select('phone_number, display_name, role');
+    const contactMap = {};
+    if (allContacts) {
+      for (const c of allContacts) {
+        contactMap[c.phone_number] = `${c.display_name} (${c.role})`;
+      }
+    }
+
+    const resolvedMessages = (messages || []).map(m => {
+      const cleanSender = (m.sender_id || '').replace(/[^0-9]/g, '');
+      const matchedContact = Object.keys(contactMap).find(p => cleanSender.includes(p) || p.includes(cleanSender));
+      return {
+        body: m.body,
+        sender: matchedContact ? contactMap[matchedContact] : (m.sender_name || m.sender_id),
+        timestamp: m.timestamp,
+        chat_id: m.chat_id
+      };
+    });
+
+    results.recent_group_messages = resolvedMessages;
 
     // 2. Fetch all current deadlines & assignments
     const { data: assignments } = await supabase
