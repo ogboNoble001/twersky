@@ -90,14 +90,20 @@ const tools = {
     }
     if (formatting_style) current.formatting_style = formatting_style.trim();
 
-    const { data, error } = await supabase
-      .from('monitored_chats')
-      .upsert({
-        chat_id: 'user_preferences',
-        name: JSON.stringify(current),
-        is_active: false
-      })
-      .select();
+    // Use UPDATE if row already exists, INSERT only if not — avoids upsert conflict key mismatches
+    let data, error;
+    if (prefRow) {
+      ({ data, error } = await supabase
+        .from('monitored_chats')
+        .update({ name: JSON.stringify(current) })
+        .eq('chat_id', 'user_preferences')
+        .select());
+    } else {
+      ({ data, error } = await supabase
+        .from('monitored_chats')
+        .insert({ chat_id: 'user_preferences', name: JSON.stringify(current), is_active: false })
+        .select());
+    }
 
     const ownerPhone = process.env.USER_PHONE_NUMBER || '2349150573885';
     if (user_name && current.use_name) {

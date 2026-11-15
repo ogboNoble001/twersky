@@ -85,11 +85,9 @@ async function orchestrateUserCommand(payload) {
     // Keep target_chat synced to the active WhatsApp conversation thread
     if (from && userPreferences.target_chat !== from) {
       userPreferences.target_chat = from;
-      await supabase.from('monitored_chats').upsert({
-        chat_id: 'user_preferences',
-        name: JSON.stringify(userPreferences),
-        is_active: false
-      });
+      await supabase.from('monitored_chats')
+        .update({ name: JSON.stringify(userPreferences) })
+        .eq('chat_id', 'user_preferences');
     }
 
     const userName = userPreferences.user_name || 'Noble';
