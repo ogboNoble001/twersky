@@ -62,9 +62,29 @@ async function getWhatsAppGroups() {
   }
 }
 
+/**
+ * Fetches recent messages from a specific WhatsApp chat or group via WAHA
+ */
+async function getChatMessages(chatId, limit = 10) {
+  try {
+    const url = `${WAHA_API_URL}/api/${WAHA_SESSION}/chats/${encodeURIComponent(chatId)}/messages?limit=${limit}`;
+    const response = await axios.get(url, {
+      headers: {
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {})
+      },
+      timeout: 10000
+    });
+    return response.data || [];
+  } catch (err) {
+    console.warn(`[WAHA] Failed to get messages for chat ${chatId}:`, err.message);
+    return [];
+  }
+}
+
 module.exports = {
   sendTextMessage,
   getWhatsAppGroups,
+  getChatMessages,
   WAHA_API_URL,
   WAHA_SESSION
 };

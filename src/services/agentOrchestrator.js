@@ -1,6 +1,6 @@
 const { callLLM } = require('./llm');
 const { tools } = require('./agentTools');
-const { sendTextMessage, getWhatsAppGroups } = require('./waha');
+const { sendTextMessage, getWhatsAppGroups, getChatMessages } = require('./waha');
 const supabase = require('../db/client');
 
 /**
@@ -24,19 +24,25 @@ COMMUNICATION & PERSONALITY:
    - ALWAYS refer to groups by their real human-readable title (for example, "OFFICIAL COMPUTER ENGINEERING 300LVL", "300LVL COMPUTER ENGINEERING CRUISE GROUP", "CPE assignment").
    - NEVER show raw technical IDs like @g.us to ${userName}.
 
-4. FORMATTING RULE:
+4. CONTEXT CONTINUITY & CONTEXT SWITCHING (CRITICAL):
+   - You are engaged in an active ongoing WhatsApp conversation with ${userName}.
+   - Inspect "recent_conversation_history" to resolve pronouns like "there", "that group", "it", "the official group", or "the last message" based on what was discussed in the preceding turns.
+   - If ${userName} quotes or swipes right to reply to a message, see "quoted_message" to immediately ground your context on that exact message.
+   - When ${userName} switches to a new subject, course code, or person, transition smoothly to the new context.
+   - When ${userName} asks what was said in a group (e.g. "what was the last message there", "the last message from the group"), you MUST invoke query_context with the group_name to retrieve the real announcement!
+
+5. FORMATTING RULE:
    ${formattingStyle === 'double_newline' 
      ? 'You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' 
      : 'Use standard natural paragraph breaks as requested by ' + userName + '.'}
 
-5. REAL ANSWERS OVER INTENTS:
-   - When asked a question (e.g. "which groups do we have", "what deadlines do we have", "what was said"), you MUST return the actual answer based on the real tool results and context.
-   - When asked about groups, list any active monitored groups AND the available WhatsApp groups by their real human names.
+6. REAL ANSWERS OVER INTENTS:
+   - When asked a question, you MUST return the actual answer based on the real tool results and context.
    - NEVER return placeholder promises like "I will look into that" or "I will query the context to see". Give the final answer directly.`;
 }
 
 /**
- * Executes a two-step agent loop:
+ * Executes a two-step agent loop with full conversation memory and context switching:
  * Step 1: LLM decides what tools to call (e.g. query_context, update_user_preference)
  * Step 2: Tools are executed, and LLM generates the final answer based on the real tool results!
  * @param {object} payload - Incoming WAHA message payload
@@ -66,7 +72,19 @@ async function orchestrateUserCommand(payload) {
     const formattingStyle = userPreferences.formatting_style || 'double_newline';
     const systemPrompt = buildSystemPrompt(userName, formattingStyle);
 
-    // 2. Gather baseline context
+    // 2. Fetch recent conversation history between Noble and Twersky from WAHA
+    const rawTurns = await getChatMessages(from, 8);
+    const recentHistory = (rawTurns || [])
+      .filter(m => m.body && m.body.trim())
+      .map(m => `[${m.fromMe ? 'Twersky' : userName}]: ${m.body.trim()}`)
+      .reverse()
+      .slice(-6);
+
+    // Quoted message check (if user replied by swiping on WhatsApp)
+    const quotedText = payload.replyTo?.body || payload._data?.quotedMsg?.body || null;
+    const quotedSender = payload.replyTo?.participant || payload._data?.quotedMsg?.author || null;
+
+    // 3. Gather database context
     const { data: contacts } = await supabase
       .from('contacts')
       .select('display_name, role, phone_number')
@@ -93,6 +111,8 @@ async function orchestrateUserCommand(payload) {
     const baselineContext = {
       owner_name: userName,
       user_preferences: userPreferences,
+      recent_conversation_history: recentHistory,
+      quoted_message: quotedText ? { sender: quotedSender, text: quotedText } : null,
       active_monitored_groups: monitoredGroups || [],
       available_whatsapp_groups: availableGroups.length > 0 ? availableGroups : [
         { name: "OFFICIAL COMPUTER ENGINEERING 300LVL", member_count: 170 },
@@ -122,11 +142,11 @@ Available tools:
 8. mark_assignment_done: { course_code, title } (use when user says "done", "submitted", marks assignment completed and resolves reminders)
 9. update_class_status: { course_code, is_cancelled, reason }
 10. remove_assignment: { course_code, remove_all }
-11. query_context: { person_name, course_code, group_name }
+11. query_context: { person_name, course_code, group_name } (use whenever user asks about what was said, last message in a group, or announcements)
 
 Output strictly JSON:
 {
-  "thought": "what tools need to be called to answer or fulfill this request",
+  "thought": "resolve what group or entity the user is referring to from recent conversation history and decide tools",
   "tool_calls": [
     { "name": "tool_name", "args": { ... } }
   ]

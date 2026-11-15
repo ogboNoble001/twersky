@@ -1,6 +1,6 @@
 const supabase = require('../db/client');
 const { verifyQuoteInMessage } = require('../utils/helpers');
-const { getWhatsAppGroups } = require('./waha');
+const { getWhatsAppGroups, getChatMessages } = require('./waha');
 
 /**
  * Registry of tools available to the LLM Orchestrator
@@ -308,26 +308,66 @@ const tools = {
   async query_context({ person_name, course_code, group_name, query_type = 'general' }) {
     const results = {};
 
-    // 1. Fetch relevant announcements or messages
-    let msgQuery = supabase
-      .from('raw_messages')
-      .select('body, sender_name, timestamp, created_at, chat_id')
-      .order('timestamp', { ascending: false })
-      .limit(20);
+    let targetChatId = null;
 
     if (group_name) {
-      // Find group chat_id if monitored
+      // 1. Find group chat_id in monitored_chats
       const { data: group } = await supabase
         .from('monitored_chats')
-        .select('chat_id')
-        .ilike('name', `%${group_name}%`)
+        .select('chat_id, name')
+        .ilike('name', `%${group_name.trim()}%`)
         .maybeSingle();
+
       if (group) {
-        msgQuery = msgQuery.eq('chat_id', group.chat_id);
+        targetChatId = group.chat_id;
+      } else {
+        // Search live WhatsApp groups by title
+        const liveGroups = await getWhatsAppGroups();
+        const matched = liveGroups.find(g => 
+          g.name.toLowerCase().includes(group_name.toLowerCase()) || 
+          group_name.toLowerCase().includes(g.name.toLowerCase())
+        );
+        if (matched) targetChatId = matched.chat_id;
+      }
+    } else {
+      // Default to the first active monitored group if one exists
+      const { data: firstMonitored } = await supabase
+        .from('monitored_chats')
+        .select('chat_id, name')
+        .eq('is_active', true)
+        .limit(1)
+        .maybeSingle();
+      if (firstMonitored) {
+        targetChatId = firstMonitored.chat_id;
       }
     }
 
-    const { data: messages } = await msgQuery;
+    // Fetch messages from Supabase raw_messages
+    let msgQuery = supabase
+      .from('raw_messages')
+      .select('body, sender_id, sender_name, timestamp, created_at, chat_id')
+      .order('timestamp', { ascending: false })
+      .limit(20);
+
+    if (targetChatId) {
+      msgQuery = msgQuery.eq('chat_id', targetChatId);
+    }
+
+    let { data: messages } = await msgQuery;
+
+    // If local database has no messages for this group, query live WAHA chat messages directly
+    if ((!messages || messages.length === 0) && targetChatId) {
+      const liveChatMsgs = await getChatMessages(targetChatId, 15);
+      if (liveChatMsgs && liveChatMsgs.length > 0) {
+        messages = liveChatMsgs.map(m => ({
+          body: m.body,
+          sender_id: m.fromMe ? 'Bot' : (m.author || m.from),
+          sender_name: m._data?.notifyName || null,
+          timestamp: m.timestamp,
+          chat_id: targetChatId
+        }));
+      }
+    }
 
     // Fetch known contacts and resolve sender numbers to names
     const { data: allContacts } = await supabase.from('contacts').select('phone_number, display_name, role');
