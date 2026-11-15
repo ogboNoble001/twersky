@@ -233,7 +233,10 @@ const tools = {
 
     if (target_date) {
       const lower = target_date.toLowerCase();
-      if (lower.includes('weekend') || lower.includes('sunday') || lower.includes('saturday')) {
+      if (lower.includes('tomorrow') || lower.includes('morrow')) {
+        nextRun.setDate(nextRun.getDate() + 1);
+        nextRun.setHours(8, 0, 0, 0); // Tomorrow 8:00 AM
+      } else if (lower.includes('weekend') || lower.includes('sunday') || lower.includes('saturday')) {
         const day = nextRun.getDay();
         const daysUntilSunday = (7 - day) % 7 || 7;
         nextRun.setDate(nextRun.getDate() + daysUntilSunday);
@@ -249,6 +252,15 @@ const tools = {
     } else {
       nextRun.setMinutes(nextRun.getMinutes() + (interval_minutes || 60));
     }
+
+    // Always deactivate existing active reminders for this topic or course so old intervals don't collide
+    let oldQuery = supabase.from('reminders').update({ is_stopped: true }).eq('is_stopped', false);
+    if (course_code) {
+      oldQuery = oldQuery.ilike('course_code', `%${course_code}%`);
+    } else if (topic) {
+      oldQuery = oldQuery.ilike('topic', `%${topic}%`);
+    }
+    await oldQuery;
 
     const { data, error } = await supabase
       .from('reminders')
@@ -296,11 +308,14 @@ const tools = {
   /**
    * Stop active reminders ("stop")
    */
-  async stop_reminders({ course_code }) {
+  async stop_reminders({ course_code, topic }) {
     let query = supabase.from('reminders').update({ is_stopped: true }).eq('is_stopped', false);
     if (course_code) {
       query = query.ilike('course_code', `%${course_code.toUpperCase()}%`);
+    } else if (topic) {
+      query = query.ilike('topic', `%${topic}%`);
     }
+    // If neither is specified, stops all active reminders
     const { data, error } = await query.select();
     if (error) return { error: error.message };
     return { success: true, stopped_count: data?.length || 0 };
