@@ -1,43 +1,36 @@
-const Groq = require('groq-sdk');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { verifyQuoteInMessage } = require('../utils/helpers');
 require('dotenv').config();
 
-let groq = null;
-if (process.env.GROQ_API_KEY) {
-  groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-}
-
-let gemini = null;
-if (process.env.GEMINI_API_KEY) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  gemini = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-}
+const rawKeys = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
+const GEMINI_KEYS = rawKeys.split(',').map(k => k.trim()).filter(Boolean);
+let keyIndex = 0;
 
 /**
- * Calls LLM (Groq preferred, fallback to Gemini) with a system instruction and user prompt
+ * Calls LLM with automatic key rotation and retry on 503/429
  */
 async function callLLM(systemPrompt, userPrompt) {
-  if (groq) {
-    const chatCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      model: 'llama-3.3-70b-versatile',
-      temperature: 0.1,
-      response_format: { type: 'json_object' }
-    });
-    return JSON.parse(chatCompletion.choices[0]?.message?.content || '{}');
-  } else if (gemini) {
-    const result = await gemini.generateContent({
-      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nTask:\n${userPrompt}` }] }],
-      generationConfig: { responseMimeType: 'application/json' }
-    });
-    return JSON.parse(result.response.text() || '{}');
-  } else {
-    throw new Error('Neither GROQ_API_KEY nor GEMINI_API_KEY is configured.');
+  let lastError = null;
+  const attempts = Math.max(GEMINI_KEYS.length, 1);
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const currentKey = GEMINI_KEYS[(keyIndex + attempt) % GEMINI_KEYS.length];
+    try {
+      const genAI = new GoogleGenerativeAI(currentKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nTask:\n${userPrompt}` }] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      });
+      keyIndex = (keyIndex + attempt) % GEMINI_KEYS.length;
+      return JSON.parse(result.response.text() || '{}');
+    } catch (err) {
+      console.warn(`[LLM] Attempt with key ${attempt} failed: ${err.message}. Retrying with next available key...`);
+      lastError = err;
+    }
   }
+
+  throw lastError || new Error('All Gemini API attempts failed.');
 }
 
 /**

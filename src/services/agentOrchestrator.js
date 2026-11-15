@@ -107,7 +107,7 @@ Decide the appropriate tool calls (if any) and your plain lowercase response.`;
 
   } catch (err) {
     console.error('[Orchestrator] Agent execution failed:', err);
-    await sendTextMessage(from, 'got it, looking into that now.');
+    await sendTextMessage(from, 'I ran into a temporary connection issue while checking that.\n\nPlease ask me again.');
   }
 }
 
