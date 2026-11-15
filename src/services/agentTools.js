@@ -1,5 +1,6 @@
 const supabase = require('../db/client');
 const { verifyQuoteInMessage } = require('../utils/helpers');
+const { getWhatsAppGroups } = require('./waha');
 
 /**
  * Registry of tools available to the LLM Orchestrator
@@ -108,7 +109,19 @@ const tools = {
   async configure_group({ chat_id, name, linked_to_group_name }) {
     let targetChatId = chat_id;
 
-    // If chat_id not provided, automatically bind to the most recent group chat discovered
+    // If chat_id not provided, try to find a matching WhatsApp group by name
+    if (!targetChatId && name) {
+      const liveGroups = await getWhatsAppGroups();
+      const matched = liveGroups.find(g => 
+        g.name.toLowerCase().includes(name.toLowerCase()) || 
+        name.toLowerCase().includes(g.name.toLowerCase())
+      );
+      if (matched) {
+        targetChatId = matched.chat_id;
+      }
+    }
+
+    // Fallback: Bind to the most recent group chat discovered in messages
     if (!targetChatId) {
       const { data: recentGroupMsg } = await supabase
         .from('raw_messages')
@@ -144,6 +157,32 @@ const tools = {
 
     if (error) return { error: error.message };
     return { success: true, group: data[0] };
+  },
+
+  /**
+   * Mark an assignment as completed ("done") and resolve its reminders
+   */
+  async mark_assignment_done({ course_code, title }) {
+    let query = supabase.from('assignments').update({ status: 'completed' });
+    let reminderQuery = supabase.from('reminders').update({ is_done: true });
+
+    if (course_code) {
+      const code = course_code.toUpperCase();
+      query = query.ilike('course_code', `%${code}%`);
+      reminderQuery = reminderQuery.ilike('course_code', `%${code}%`);
+    } else if (title) {
+      query = query.ilike('title', `%${title}%`);
+      reminderQuery = reminderQuery.ilike('topic', `%${title}%`);
+    }
+
+    const { data: updatedAssignments } = await query.select();
+    await reminderQuery;
+
+    return {
+      success: true,
+      message: 'Assignment marked as completed and reminders resolved.',
+      completed: updatedAssignments
+    };
   },
 
   /**

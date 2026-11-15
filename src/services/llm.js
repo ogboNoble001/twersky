@@ -9,6 +9,29 @@ function getGeminiKeys() {
 
 let keyIndex = 0;
 
+function safeJsonParse(str) {
+  if (!str) return {};
+  const cleaned = str.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '');
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    try {
+      // Fix unescaped control characters in string literals
+      const sanitized = cleaned.replace(/[\n\r\t]/g, (match) => {
+        if (match === '\n') return '\\n';
+        if (match === '\r') return '\\r';
+        if (match === '\t') return '\\t';
+        return '';
+      });
+      return JSON.parse(sanitized);
+    } catch (e2) {
+      const match = cleaned.match(/"response"\s*:\s*"([\s\S]*?)"\s*\}/);
+      if (match) return { response: match[1] };
+      throw e;
+    }
+  }
+}
+
 /**
  * Calls Gemini using the modern @google/genai SDK with automatic key rotation and resilience.
  */
@@ -31,7 +54,7 @@ async function callLLM(systemPrompt, userPrompt) {
 
       const responseText = response.text || '';
       keyIndex = (keyIndex + attempt) % geminiKeys.length;
-      return JSON.parse(responseText.trim() || '{}');
+      return safeJsonParse(responseText);
     } catch (err) {
       console.warn(`[LLM] Attempt with key #${(keyIndex + attempt) % geminiKeys.length} failed: ${err.message}. Rotating key...`);
       lastError = err;
