@@ -1,4 +1,5 @@
 const { GoogleGenAI } = require('@google/genai');
+const Groq = require('groq-sdk');
 const { verifyQuoteInMessage } = require('../utils/helpers');
 require('dotenv').config();
 
@@ -16,7 +17,6 @@ function safeJsonParse(str) {
     return JSON.parse(cleaned);
   } catch (e) {
     try {
-      // Fix unescaped control characters in string literals
       const sanitized = cleaned.replace(/[\n\r\t]/g, (match) => {
         if (match === '\n') return '\\n';
         if (match === '\r') return '\\r';
@@ -33,7 +33,30 @@ function safeJsonParse(str) {
 }
 
 /**
- * Calls Gemini using the modern @google/genai SDK with automatic key rotation and resilience.
+ * Fallback to Groq (llama-3.3-70b) when all Gemini keys are exhausted.
+ */
+async function callGroq(systemPrompt, userPrompt) {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) throw new Error('No GROQ_API_KEY set.');
+
+  const groq = new Groq({ apiKey: groqKey });
+  const completion = await groq.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
+    messages: [
+      { role: 'system', content: systemPrompt + '\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation.' },
+      { role: 'user', content: userPrompt }
+    ],
+    temperature: 0.3,
+    response_format: { type: 'json_object' }
+  });
+
+  const text = completion.choices[0]?.message?.content || '';
+  console.log('[LLM] Groq fallback used successfully.');
+  return safeJsonParse(text);
+}
+
+/**
+ * Calls Gemini first (with key rotation). Falls back to Groq if all Gemini keys are quota-exhausted.
  */
 async function callLLM(systemPrompt, userPrompt) {
   let lastError = null;
@@ -47,21 +70,27 @@ async function callLLM(systemPrompt, userPrompt) {
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: `${systemPrompt}\n\nTask:\n${userPrompt}`,
-        config: {
-          responseMimeType: 'application/json'
-        }
+        config: { responseMimeType: 'application/json' }
       });
 
       const responseText = response.text || '';
       keyIndex = (keyIndex + attempt) % geminiKeys.length;
       return safeJsonParse(responseText);
     } catch (err) {
-      console.warn(`[LLM] Attempt with key #${(keyIndex + attempt) % geminiKeys.length} failed: ${err.message}. Rotating key...`);
+      const is429 = err.message && err.message.includes('429');
+      console.warn(`[LLM] Gemini key #${(keyIndex + attempt) % geminiKeys.length} failed${is429 ? ' (quota)' : ''}: rotating...`);
       lastError = err;
     }
   }
 
-  throw lastError || new Error('All Gemini API attempts failed.');
+  // All Gemini keys exhausted — try Groq
+  console.warn('[LLM] All Gemini keys failed. Trying Groq fallback...');
+  try {
+    return await callGroq(systemPrompt, userPrompt);
+  } catch (groqErr) {
+    console.error('[LLM] Groq fallback also failed:', groqErr.message);
+    throw lastError || groqErr;
+  }
 }
 
 /**
