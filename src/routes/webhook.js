@@ -42,7 +42,7 @@ router.post('/whatsapp', async (req, res) => {
 
     // Check if message is a direct command from the main user
     const authorizedUser = process.env.USER_PHONE_NUMBER;
-    if (isDirectMessage && isAuthorizedUser(actualSender, authorizedUser)) {
+    if (isDirectMessage && isAuthorizedUser(payload, authorizedUser)) {
       // Process direct user command
       await handleUserCommand(payload);
       return res.status(200).json({ status: 'command_processed' });

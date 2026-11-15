@@ -8,14 +8,22 @@ function normalizePhone(jidOrNumber) {
 }
 
 /**
- * Checks if the incoming message is from the authorized user
- * @param {string} senderJid
+ * Checks if the incoming message is from the authorized user.
+ * Supports standard phone numbers and WhatsApp's modern LID addressing (using remoteJidAlt).
+ * @param {object} payload - WAHA incoming payload
  * @param {string} authorizedUserConfig
  */
-function isAuthorizedUser(senderJid, authorizedUserConfig) {
-  const normSender = normalizePhone(senderJid);
+function isAuthorizedUser(payload, authorizedUserConfig) {
   const normAuth = normalizePhone(authorizedUserConfig);
-  return Boolean(normSender && normAuth && normSender === normAuth);
+  if (!normAuth) return false;
+
+  const actualSender = payload.sender || payload.from || '';
+  const altSender = payload._data?.key?.remoteJidAlt || '';
+
+  const normSender = normalizePhone(actualSender);
+  const normAlt = normalizePhone(altSender);
+
+  return normSender === normAuth || normAlt === normAuth;
 }
 
 /**
