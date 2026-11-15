@@ -103,20 +103,10 @@ async function processDueReminders() {
     }
 
     for (const reminder of dueReminders) {
-      const { quiet_hours_start, quiet_hours_end, interval_minutes, course_code, topic } = reminder;
+      const { interval_minutes, course_code, topic } = reminder;
 
-      // 2. Check Quiet Hours
-      if (isWithinQuietHours(quiet_hours_start, quiet_hours_end)) {
-        const postponeTime = getEndOfQuietHoursTime(quiet_hours_end);
-        console.log(`[Scheduler] Reminder ${reminder.id} is inside quiet hours. Postponing until ${postponeTime.toISOString()}`);
-        await supabase
-          .from('reminders')
-          .update({ next_run_at: postponeTime.toISOString() })
-          .eq('id', reminder.id);
-        continue;
-      }
-
-      // 3. Compose the reminder message
+      // Direct delivery 24/7: No quiet hours or suppression
+      // 2. Compose the reminder message
       const assignment = reminder.assignments;
       const deadlineInfo = assignment?.deadline_text ? `Deadline is ${assignment.deadline_text}.` : 'Deadline details not specified.';
       const coursePrefix = course_code ? `[${course_code}] ` : '';
@@ -127,7 +117,7 @@ ${deadlineInfo}
 
 Reply "done" when you complete it, or "stop" to pause reminders for this.`;
 
-      // 4. Send via WAHA to the owner
+      // 3. Send via WAHA to the owner
       try {
         const targetChat = OWNER_PHONE.includes('@') ? OWNER_PHONE : `${OWNER_PHONE}@c.us`;
         await sendTextMessage(targetChat, reminderText);
@@ -136,7 +126,7 @@ Reply "done" when you complete it, or "stop" to pause reminders for this.`;
         console.error(`[Scheduler] Failed to dispatch reminder ${reminder.id}:`, sendErr.message);
       }
 
-      // 5. Calculate escalating interval and schedule the next run
+      // 4. Calculate escalating interval and schedule the next run
       const nextInterval = calculateEscalatingInterval(interval_minutes, assignment?.deadline_timestamp);
       const nextRunAt = new Date(Date.now() + nextInterval * 60 * 1000);
 
