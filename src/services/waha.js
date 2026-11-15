@@ -1,7 +1,7 @@
 const axios = require('axios');
 require('dotenv').config();
 
-const WAHA_API_URL = (process.env.WAHA_API_URL || 'http://localhost:3000').replace(/\/$/, '');
+const WAHA_API_URL = (process.env.WAHA_API_URL || 'https://twersky-waha.onrender.com').replace(/\/$/, '');
 const WAHA_API_KEY = process.env.WAHA_API_KEY || '';
 const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
 
