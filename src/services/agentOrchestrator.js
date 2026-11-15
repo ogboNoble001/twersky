@@ -162,7 +162,7 @@ Available tools:
 3. update_user_preference: { user_name, formatting_style, use_name } (if user says "stop calling my name", "don't call my name", pass use_name: false. If user says "call me [name]", pass user_name: [name], use_name: true)
 4. configure_group: { chat_id, name, linked_to_group_name } (binds group by name e.g. "OFFICIAL COMPUTER ENGINEERING 300LVL")
 5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
-6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (use target_date: 'this weekend' to schedule weekend preparatory reminders)
+6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (target_date accepts natural language: 'tomorrow', 'this weekend', 'next week', 'in 2 days', 'in the next three days', 'in 4 hours', 'saturday', or any date string — the system resolves it automatically)
 7. stop_reminders: { course_code } (use when user says "stop", pauses reminders without marking assignment completed)
 8. mark_assignment_done: { course_code, title } (use when user says "done", "submitted", marks assignment completed and resolves reminders)
 9. update_class_status: { course_code, is_cancelled, reason }

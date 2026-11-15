@@ -232,15 +232,40 @@ const tools = {
     let nextRun = new Date();
 
     if (target_date) {
-      const lower = target_date.toLowerCase();
-      if (lower.includes('tomorrow') || lower.includes('morrow')) {
+      const str = target_date.toLowerCase().trim();
+      const numMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+
+      // "in X days" / "in the next X days" / "X days from now"
+      const daysMatch = str.match(/(?:in\s+(?:the\s+next\s+)?)?(\d+|one|two|three|four|five|six|seven)\s+days?(?:\s+from\s+now)?/i);
+      if (daysMatch) {
+        const count = parseInt(daysMatch[1]) || numMap[daysMatch[1].toLowerCase()] || 2;
+        nextRun.setDate(nextRun.getDate() + count);
+        nextRun.setHours(9, 0, 0, 0);
+
+      // "in X hours"
+      } else if (str.match(/in\s+(\d+|one|two|three|four|five)\s+hours?/i)) {
+        const hMatch = str.match(/in\s+(\d+|one|two|three|four|five)\s+hours?/i);
+        const count = parseInt(hMatch[1]) || numMap[hMatch[1].toLowerCase()] || 1;
+        nextRun.setHours(nextRun.getHours() + count);
+
+      // "tomorrow" / "morrow"
+      } else if (str.includes('tomorrow') || str.includes('morrow')) {
         nextRun.setDate(nextRun.getDate() + 1);
-        nextRun.setHours(8, 0, 0, 0); // Tomorrow 8:00 AM
-      } else if (lower.includes('weekend') || lower.includes('sunday') || lower.includes('saturday')) {
+        nextRun.setHours(8, 0, 0, 0);
+
+      // "weekend" / "saturday" / "sunday"
+      } else if (str.includes('weekend') || str.includes('sunday') || str.includes('saturday')) {
         const day = nextRun.getDay();
         const daysUntilSunday = (7 - day) % 7 || 7;
         nextRun.setDate(nextRun.getDate() + daysUntilSunday);
-        nextRun.setHours(12, 0, 0, 0); // Sunday noon
+        nextRun.setHours(12, 0, 0, 0);
+
+      // "next week"
+      } else if (str.includes('next week')) {
+        nextRun.setDate(nextRun.getDate() + 7);
+        nextRun.setHours(9, 0, 0, 0);
+
+      // ISO / standard date string
       } else {
         const parsed = new Date(target_date);
         if (!isNaN(parsed.getTime())) {
