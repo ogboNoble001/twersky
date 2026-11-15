@@ -6,14 +6,21 @@ const supabase = require('../db/client');
 /**
  * Builds the dynamic system prompt customized to the owner's preferred name and style.
  */
-function buildSystemPrompt(userName = 'Noble', formattingStyle = 'double_newline') {
-  return `You are Twersky, an intelligent, connected academic personal assistant running on WhatsApp for your owner, ${userName}.
-
-COMMUNICATION & PERSONALITY:
-1. ADDRESSING YOUR OWNER:
+function buildSystemPrompt(userName = 'Noble', formattingStyle = 'double_newline', useName = true) {
+  const addressingRule = useName
+    ? `1. ADDRESSING YOUR OWNER:
    - Your owner's name is ${userName}.
    - Do NOT overuse or repeatedly insert their name into every response. Use it sparingly and naturally (e.g. at the start of a greeting or an important alert), never awkwardly or robotically.
-   - If ${userName} tells you to call them by another name, or asks to change their name or formatting style, use the update_user_preference tool immediately.
+   - If ${userName} tells you to call them by another name, or asks to change their name or formatting style, use the update_user_preference tool immediately.`
+    : `1. ADDRESSING YOUR OWNER:
+   - The owner has explicitly requested: DO NOT CALL THEM BY ANY NAME.
+   - Never insert ${userName} or any name in your responses. Speak directly, politely, and naturally without addressing them by name.
+   - If they later say "Call me [name]", call update_user_preference with user_name and use_name: true.`;
+
+  return `You are Twersky, an intelligent, connected academic personal assistant running on WhatsApp for your owner.
+
+COMMUNICATION & PERSONALITY:
+${addressingRule}
 
 2. STYLE & PERSONALITY:
    - Standard natural sentence case (proper capitalization and punctuation).
@@ -23,25 +30,25 @@ COMMUNICATION & PERSONALITY:
 
 3. GROUP NAMES RULE:
    - ALWAYS refer to groups by their real human-readable title (for example, "OFFICIAL COMPUTER ENGINEERING 300LVL", "300LVL COMPUTER ENGINEERING CRUISE GROUP", "CPE assignment").
-   - NEVER show raw technical IDs like @g.us to ${userName}.
+   - NEVER show raw technical IDs like @g.us.
 
 4. CONTEXT CONTINUITY & CONTEXT SWITCHING (CRITICAL):
-   - You are engaged in an active ongoing WhatsApp conversation with ${userName}.
+   - You are engaged in an active ongoing WhatsApp conversation with your owner.
    - Inspect "recent_conversation_history" to resolve pronouns like "there", "that group", "it", "the official group", or "the last message" based on what was discussed in the preceding turns.
-   - If ${userName} quotes or swipes right to reply to a message, see "quoted_message" to immediately ground your context on that exact message.
-   - When ${userName} switches to a new subject, course code, or person, transition smoothly to the new context.
-   - When ${userName} asks what was said in a group (e.g. "what was the last message there", "the last message from the group"), you MUST invoke query_context with the group_name to retrieve the real announcement!
+   - If the user quotes or swipes right to reply to a message, see "quoted_message" to immediately ground your context on that exact message.
+   - When the user switches to a new subject, course code, or person, transition smoothly to the new context.
+   - When the user asks what was said in a group (e.g. "what was the last message there", "the last message from the group"), you MUST invoke query_context with the group_name to retrieve the real announcement!
 
 5. PROACTIVE ACADEMIC FOLLOW-UPS & PREPARATION REMINDERS:
    - When an announcement or course requirement mentions lectures or deadlines starting "next week" or requiring early preparation (for example, GET 307 Python fundamentals):
      a) State the announcement details and what preparation is required.
-     b) Schedule a preparatory reminder for the upcoming weekend using set_reminder({ course_code, topic, target_date: 'this weekend' }) so ${userName} is reminded before lectures start.
-     c) Explicitly tell ${userName} that you have scheduled this weekend reminder for them.
+     b) Schedule a preparatory reminder for the upcoming weekend using set_reminder({ course_code, topic, target_date: 'this weekend' }) so the user is reminded before lectures start.
+     c) Explicitly confirm that you have scheduled this weekend reminder.
 
 6. FORMATTING RULE:
    ${formattingStyle === 'double_newline' 
      ? 'You MUST insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' 
-     : 'Use standard natural paragraph breaks as requested by ' + userName + '.'}
+     : 'Use standard natural paragraph breaks as requested.'}
 
 7. REAL ANSWERS OVER INTENTS:
    - When asked a question, you MUST return the actual answer based on the real tool results and context.
@@ -68,22 +75,33 @@ async function orchestrateUserCommand(payload) {
       .eq('chat_id', 'user_preferences')
       .maybeSingle();
 
-    let userPreferences = { user_name: 'Noble', formatting_style: 'double_newline' };
+    let userPreferences = { user_name: 'Noble', formatting_style: 'double_newline', use_name: true, target_chat: from };
     if (prefRow && prefRow.name) {
       try {
         userPreferences = { ...userPreferences, ...JSON.parse(prefRow.name) };
       } catch (e) {}
     }
 
-    const userName = userPreferences.user_name || 'Noble';
-    const formattingStyle = userPreferences.formatting_style || 'double_newline';
-    const systemPrompt = buildSystemPrompt(userName, formattingStyle);
+    // Keep target_chat synced to the active WhatsApp conversation thread
+    if (from && userPreferences.target_chat !== from) {
+      userPreferences.target_chat = from;
+      await supabase.from('monitored_chats').upsert({
+        chat_id: 'user_preferences',
+        name: JSON.stringify(userPreferences),
+        is_active: false
+      });
+    }
 
-    // 2. Fetch recent conversation history between Noble and Twersky from WAHA
+    const userName = userPreferences.user_name || 'Noble';
+    const useName = userPreferences.use_name !== false;
+    const formattingStyle = userPreferences.formatting_style || 'double_newline';
+    const systemPrompt = buildSystemPrompt(userName, formattingStyle, useName);
+
+    // 2. Fetch recent conversation history between the user and Twersky from WAHA
     const rawTurns = await getChatMessages(from, 8);
     const recentHistory = (rawTurns || [])
       .filter(m => m.body && m.body.trim())
-      .map(m => `[${m.fromMe ? 'Twersky' : userName}]: ${m.body.trim()}`)
+      .map(m => `[${m.fromMe ? 'Twersky' : (useName ? userName : 'User')}]: ${m.body.trim()}`)
       .reverse()
       .slice(-6);
 
@@ -141,7 +159,7 @@ User's WhatsApp Message:
 Available tools:
 1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if referring to recent message)
 2. delete_contact: { display_name, phone_number } (use when user asks to delete or remove a contact)
-3. update_user_preference: { user_name, formatting_style } (use when user says "call me [name]", "my name is [name]", or requests a formatting style change)
+3. update_user_preference: { user_name, formatting_style, use_name } (if user says "stop calling my name", "don't call my name", pass use_name: false. If user says "call me [name]", pass user_name: [name], use_name: true)
 4. configure_group: { chat_id, name, linked_to_group_name } (binds group by name e.g. "OFFICIAL COMPUTER ENGINEERING 300LVL")
 5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
 6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (use target_date: 'this weekend' to schedule weekend preparatory reminders)

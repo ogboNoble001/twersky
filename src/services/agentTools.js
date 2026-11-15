@@ -63,21 +63,31 @@ const tools = {
   },
 
   /**
-   * Update the owner's personal preferences (preferred name, response formatting style)
+   * Update the owner's personal preferences (preferred name, response formatting style, name usage)
    */
-  async update_user_preference({ user_name, formatting_style }) {
+  async update_user_preference({ user_name, formatting_style, use_name }) {
     const { data: prefRow } = await supabase
       .from('monitored_chats')
       .select('name')
       .eq('chat_id', 'user_preferences')
       .maybeSingle();
 
-    let current = { user_name: 'Noble', formatting_style: 'double_newline' };
+    let current = { user_name: 'Noble', formatting_style: 'double_newline', use_name: true };
     if (prefRow && prefRow.name) {
-      try { current = JSON.parse(prefRow.name); } catch (e) {}
+      try { current = { ...current, ...JSON.parse(prefRow.name) }; } catch (e) {}
     }
 
-    if (user_name) current.user_name = user_name.trim();
+    if (typeof use_name === 'boolean') {
+      current.use_name = use_name;
+    }
+    if (user_name !== undefined) {
+      if (user_name === '' || user_name === null) {
+        current.use_name = false;
+      } else {
+        current.user_name = user_name.trim();
+        current.use_name = true;
+      }
+    }
     if (formatting_style) current.formatting_style = formatting_style.trim();
 
     const { data, error } = await supabase
@@ -90,7 +100,7 @@ const tools = {
       .select();
 
     const ownerPhone = process.env.USER_PHONE_NUMBER || '2349150573885';
-    if (user_name) {
+    if (user_name && current.use_name) {
       await supabase.from('contacts').upsert({
         phone_number: ownerPhone,
         display_name: current.user_name,

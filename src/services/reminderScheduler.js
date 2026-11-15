@@ -97,10 +97,14 @@ async function processDueReminders() {
       .eq('chat_id', 'user_preferences')
       .maybeSingle();
 
-    let userName = 'Noble';
+    let userPreferences = { user_name: 'Noble', use_name: true, target_chat: null };
     if (prefRow && prefRow.name) {
-      try { userName = JSON.parse(prefRow.name).user_name || 'Noble'; } catch (e) {}
+      try { userPreferences = { ...userPreferences, ...JSON.parse(prefRow.name) }; } catch (e) {}
     }
+
+    const userName = userPreferences.user_name || 'Noble';
+    const useName = userPreferences.use_name !== false;
+    const targetChat = userPreferences.target_chat || (OWNER_PHONE.includes('@') ? OWNER_PHONE : `${OWNER_PHONE}@c.us`);
 
     for (const reminder of dueReminders) {
       const { interval_minutes, course_code, topic } = reminder;
@@ -110,16 +114,16 @@ async function processDueReminders() {
       const assignment = reminder.assignments;
       const deadlineInfo = assignment?.deadline_text ? `Deadline is ${assignment.deadline_text}.` : 'Deadline details not specified.';
       const coursePrefix = course_code ? `[${course_code}] ` : '';
+      const prefix = useName ? `${userName}, this is your reminder for ${coursePrefix}${topic}.` : `This is your reminder for ${coursePrefix}${topic}.`;
 
-      const reminderText = `${userName}, this is your reminder for ${coursePrefix}${topic}.
+      const reminderText = `${prefix}
 
 ${deadlineInfo}
 
 Reply "done" when you complete it, or "stop" to pause reminders for this.`;
 
-      // 3. Send via WAHA to the owner
+      // 3. Send via WAHA to the owner's active chat
       try {
-        const targetChat = OWNER_PHONE.includes('@') ? OWNER_PHONE : `${OWNER_PHONE}@c.us`;
         await sendTextMessage(targetChat, reminderText);
         console.log(`[Scheduler] Reminder sent successfully to ${targetChat} for "${topic}".`);
       } catch (sendErr) {
