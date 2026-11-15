@@ -33,26 +33,38 @@ function safeJsonParse(str) {
 }
 
 /**
- * Fallback to Groq (llama-3.3-70b) when all Gemini keys are exhausted.
+ * Fallback to Groq when all Gemini keys are exhausted.
  */
 async function callGroq(systemPrompt, userPrompt) {
   const groqKey = process.env.GROQ_API_KEY;
   if (!groqKey) throw new Error('No GROQ_API_KEY set.');
 
   const groq = new Groq({ apiKey: groqKey });
-  const completion = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      { role: 'system', content: systemPrompt + '\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation.' },
-      { role: 'user', content: userPrompt }
-    ],
-    temperature: 0.3,
-    response_format: { type: 'json_object' }
-  });
+  const models = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+  let lastErr = null;
 
-  const text = completion.choices[0]?.message?.content || '';
-  console.log('[LLM] Groq fallback used successfully.');
-  return safeJsonParse(text);
+  for (const model of models) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt + '\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation.' },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.3,
+        response_format: { type: 'json_object' }
+      });
+
+      const text = completion.choices[0]?.message?.content || '';
+      console.log(`[LLM] Groq fallback used successfully with model: ${model}`);
+      return safeJsonParse(text);
+    } catch (err) {
+      console.warn(`[LLM] Groq model ${model} failed: ${err.message}. Trying next Groq model...`);
+      lastErr = err;
+    }
+  }
+
+  throw lastErr || new Error('All Groq fallback models failed.');
 }
 
 /**
