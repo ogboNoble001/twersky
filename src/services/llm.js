@@ -11,7 +11,7 @@ if (process.env.GROQ_API_KEY) {
 let gemini = null;
 if (process.env.GEMINI_API_KEY) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  gemini = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  gemini = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 }
 
 /**
