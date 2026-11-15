@@ -1,31 +1,39 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 const { verifyQuoteInMessage } = require('../utils/helpers');
 require('dotenv').config();
 
-const rawKeys = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
-const GEMINI_KEYS = rawKeys.split(',').map(k => k.trim()).filter(Boolean);
+function getGeminiKeys() {
+  const rawKeys = process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || '';
+  return rawKeys.split(',').map(k => k.trim()).filter(Boolean);
+}
+
 let keyIndex = 0;
 
 /**
- * Calls LLM with automatic key rotation and retry on 503/429
+ * Calls Gemini using the modern @google/genai SDK with automatic key rotation and resilience.
  */
 async function callLLM(systemPrompt, userPrompt) {
   let lastError = null;
-  const attempts = Math.max(GEMINI_KEYS.length, 1);
+  const geminiKeys = getGeminiKeys();
+  const attempts = Math.max(geminiKeys.length, 1);
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const currentKey = GEMINI_KEYS[(keyIndex + attempt) % GEMINI_KEYS.length];
+    const currentKey = geminiKeys[(keyIndex + attempt) % geminiKeys.length];
     try {
-      const genAI = new GoogleGenerativeAI(currentKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-      const result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\nTask:\n${userPrompt}` }] }],
-        generationConfig: { responseMimeType: 'application/json' }
+      const ai = new GoogleGenAI({ apiKey: currentKey, apiVersion: 'v1beta' });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `${systemPrompt}\n\nTask:\n${userPrompt}`,
+        config: {
+          responseMimeType: 'application/json'
+        }
       });
-      keyIndex = (keyIndex + attempt) % GEMINI_KEYS.length;
-      return JSON.parse(result.response.text() || '{}');
+
+      const responseText = response.text || '';
+      keyIndex = (keyIndex + attempt) % geminiKeys.length;
+      return JSON.parse(responseText.trim() || '{}');
     } catch (err) {
-      console.warn(`[LLM] Attempt with key ${attempt} failed: ${err.message}. Retrying with next available key...`);
+      console.warn(`[LLM] Attempt with key #${(keyIndex + attempt) % geminiKeys.length} failed: ${err.message}. Rotating key...`);
       lastError = err;
     }
   }
@@ -61,7 +69,7 @@ CRITICAL ACCURACY RULES:
     return null;
   }
 
-  // Strict code verification: Verbatim quote check
+  // Strict verification: Verbatim quote check against original message
   if (extraction.quote && !verifyQuoteInMessage(messageText, extraction.quote)) {
     console.warn(`[LLM Check] Quote verification failed! Discarding hallucinated extraction. Quote: "${extraction.quote}"`);
     return null;
