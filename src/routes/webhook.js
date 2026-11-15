@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../db/client');
 const { isAuthorizedUser } = require('../utils/helpers');
-const { handleUserCommand } = require('../services/commandHandler');
+const { orchestrateUserCommand } = require('../services/agentOrchestrator');
 
 // WAHA Webhook Receiver
 router.post('/whatsapp', async (req, res) => {
@@ -21,7 +21,7 @@ router.post('/whatsapp', async (req, res) => {
     // Destructure message fields from WAHA payload
     const {
       id: messageId,
-      from,             // JID of chat (can be group e.g. 123@g.us or user 234...@c.us)
+      from,             // JID of chat (can be group e.g. 123@g.us or user 234...@c.us or @lid)
       fromMe,           // Boolean: was this sent by the bot's line itself?
       sender,           // In groups, the participant's JID
       body,
@@ -43,12 +43,12 @@ router.post('/whatsapp', async (req, res) => {
     // Check if message is a direct command from the main user
     const authorizedUser = process.env.USER_PHONE_NUMBER;
     if (isDirectMessage && isAuthorizedUser(payload, authorizedUser)) {
-      // Process direct user command
-      await handleUserCommand(payload);
-      return res.status(200).json({ status: 'command_processed' });
+      // Hand off to the LLM Agent Orchestrator
+      await orchestrateUserCommand(payload);
+      return res.status(200).json({ status: 'orchestrated' });
     }
 
-    // Group Message / Monitored message: Save word-for-word in raw_messages
+    // Group Message: Save verbatim in raw_messages
     const { error: insertError } = await supabase.from('raw_messages').upsert({
       id: messageId,
       chat_id: from,
@@ -75,3 +75,4 @@ router.post('/whatsapp', async (req, res) => {
 });
 
 module.exports = router;
+
