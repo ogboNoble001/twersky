@@ -198,7 +198,7 @@ Available tools:
 1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if referring to recent message)
 2. delete_contact: { display_name, phone_number } (use when user asks to delete or remove a contact)
 3. update_user_preference: { user_name, formatting_style, use_name } (if user says "stop calling my name", "don't call my name", pass use_name: false. If user says "call me [name]", pass user_name: [name], use_name: true)
-4. configure_group: { chat_id, name, linked_to_group_name } (binds group by name e.g. "OFFICIAL COMPUTER ENGINEERING 300LVL" — MUST use real chat_id from available_whatsapp_groups, never invent one)
+4. configure_group: { name, linked_to_group_name } (starts monitoring a group by its title e.g. "Testing_meez" or "OFFICIAL COMPUTER ENGINEERING 300LVL" — do NOT pass chat_id, the system automatically resolves the real WhatsApp ID)
 5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
 6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (target_date accepts natural language: 'tomorrow', 'this weekend', 'next week', 'in 2 days', 'in the next three days', 'in 4 hours', 'saturday', or any date string — the system resolves it automatically)
 7. stop_reminders: { course_code, topic } (use when user says "stop", pauses reminders without marking assignment completed)

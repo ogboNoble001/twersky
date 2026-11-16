@@ -123,32 +123,69 @@ const tools = {
    * Monitor or link groups (e.g. class group, youth group, crew group)
    */
   async configure_group({ chat_id, name, linked_to_group_name }) {
-    let targetChatId = chat_id;
+    let targetChatId = null;
+    const groupName = (name || '').trim();
 
-    // If chat_id not provided, try to find a matching WhatsApp group by name
-    if (!targetChatId && name) {
-      const liveGroups = await getWhatsAppGroups();
-      const matched = liveGroups.find(g => 
-        g.name.toLowerCase().includes(name.toLowerCase()) || 
-        name.toLowerCase().includes(g.name.toLowerCase())
-      );
+    if (!groupName && !chat_id) {
+      return { error: 'Please provide the name of the group to monitor.' };
+    }
+
+    // 1. Search live groups from WAHA by title (case-insensitive, normalized)
+    const liveGroups = await getWhatsAppGroups();
+    if (liveGroups && liveGroups.length > 0 && groupName) {
+      const cleanTarget = groupName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const matched = liveGroups.find(g => {
+        const cleanG = (g.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        return cleanG.includes(cleanTarget) || cleanTarget.includes(cleanG);
+      });
       if (matched) {
         targetChatId = matched.chat_id;
       }
     }
 
-    // Fallback: Bind to the most recent group chat discovered in messages
+    // 2. Check if already known in monitored_chats by name
+    if (!targetChatId && groupName) {
+      const { data: existing } = await supabase
+        .from('monitored_chats')
+        .select('chat_id')
+        .ilike('name', `%${groupName}%`)
+        .maybeSingle();
+      if (existing) {
+        targetChatId = existing.chat_id;
+      }
+    }
+
+    // 3. Fallback: Check if recent raw_messages has this group
+    if (!targetChatId && chat_id && chat_id.endsWith('@g.us')) {
+      const { data: rawMsg } = await supabase
+        .from('raw_messages')
+        .select('chat_id')
+        .eq('chat_id', chat_id)
+        .limit(1)
+        .maybeSingle();
+      if (rawMsg) {
+        targetChatId = rawMsg.chat_id;
+      }
+    }
+
+    // 4. If still not found, check the most recent incoming group message in raw_messages
     if (!targetChatId) {
-      const { data: recentGroupMsg } = await supabase
+      const { data: latestGroupMsg } = await supabase
         .from('raw_messages')
         .select('chat_id')
         .ilike('chat_id', '%@g.us%')
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (recentGroupMsg && recentGroupMsg.chat_id) {
-        targetChatId = recentGroupMsg.chat_id;
+      if (latestGroupMsg && latestGroupMsg.chat_id) {
+        targetChatId = latestGroupMsg.chat_id;
       }
+    }
+
+    if (!targetChatId) {
+      return {
+        error: `Could not find a group matching "${groupName}". Please ensure the bot's second line is added to that group.`
+      };
     }
 
     let linked_chat_id = null;
@@ -164,8 +201,8 @@ const tools = {
     const { data, error } = await supabase
       .from('monitored_chats')
       .upsert({
-        chat_id: targetChatId || `group_${Date.now()}`,
-        name: name,
+        chat_id: targetChatId,
+        name: groupName || 'Group Chat',
         is_active: true,
         linked_chat_id
       })

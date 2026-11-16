@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const axios = require('axios');
 const supabase = require('../db/client');
 const { sendTextMessage } = require('./waha');
 require('dotenv').config();
@@ -155,6 +156,17 @@ function initReminderScheduler() {
   // Run every minute
   cron.schedule('* * * * *', async () => {
     await processDueReminders();
+  });
+
+  // Keep-alive ping every 8 minutes to prevent Render free-tier containers from sleeping
+  cron.schedule('*/8 * * * *', async () => {
+    try {
+      const wahaUrl = (process.env.WAHA_API_URL || 'https://twersky-waha.onrender.com').replace(/\/$/, '');
+      await axios.get(`${wahaUrl}/ping`, { timeout: 8000 }).catch(() => {});
+      const backendUrl = process.env.BACKEND_URL || 'https://twersky-backend.onrender.com';
+      await axios.get(`${backendUrl}/health`, { timeout: 8000 }).catch(() => {});
+      console.log('[KeepAlive] Sent 8-minute keep-alive ping to WAHA and Backend.');
+    } catch (e) {}
   });
 }
 
