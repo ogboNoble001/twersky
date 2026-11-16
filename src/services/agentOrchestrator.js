@@ -158,14 +158,19 @@ Available tools:
 1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if referring to recent message)
 2. delete_contact: { display_name, phone_number } (use when user asks to delete or remove a contact)
 3. update_user_preference: { user_name, formatting_style, use_name } (if user says "stop calling my name", "don't call my name", pass use_name: false. If user says "call me [name]", pass user_name: [name], use_name: true)
-4. configure_group: { chat_id, name, linked_to_group_name } (binds group by name e.g. "OFFICIAL COMPUTER ENGINEERING 300LVL")
+4. configure_group: { chat_id, name, linked_to_group_name } (binds group by name e.g. "OFFICIAL COMPUTER ENGINEERING 300LVL" — MUST use real chat_id from available_whatsapp_groups, never invent one)
 5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
 6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (target_date accepts natural language: 'tomorrow', 'this weekend', 'next week', 'in 2 days', 'in the next three days', 'in 4 hours', 'saturday', or any date string — the system resolves it automatically)
-7. stop_reminders: { course_code } (use when user says "stop", pauses reminders without marking assignment completed)
+7. stop_reminders: { course_code, topic } (use when user says "stop", pauses reminders without marking assignment completed)
 8. mark_assignment_done: { course_code, title } (use when user says "done", "submitted", marks assignment completed and resolves reminders)
 9. update_class_status: { course_code, is_cancelled, reason }
 10. remove_assignment: { course_code, remove_all }
 11. query_context: { person_name, course_code, group_name } (use whenever user asks about what was said, last message in a group, or announcements)
+
+TOOL CALLING RULES:
+- If the user's request requires a tool, you MUST call it. Never pretend a tool ran without calling it.
+- If you are unsure which tool to call, call query_context to look up real data first.
+- tool_calls must be an empty array [] if no tool is needed.
 
 Output strictly JSON:
 {
@@ -195,6 +200,7 @@ Output strictly JSON:
     }
 
     // Step 2: Generate the final direct response using the tool execution results
+    const toolsWereCalled = executionResults.length > 0;
     const step2Prompt = `System Context:
 ${JSON.stringify(baselineContext, null, 2)}
 
@@ -204,16 +210,24 @@ ${JSON.stringify(executionResults, null, 2)}
 User's Original Message:
 "${userText}"
 
-Generate the final response directly to ${userName}.
-Address ${userName} naturally.
-Formatting rule: ${formattingStyle === 'double_newline' ? 'Insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' : 'Use clean natural formatting.'}
+CRITICAL RULES FOR YOUR RESPONSE:
+1. ONLY use facts from "Tool Execution Results" above. Do NOT invent or assume any data not present there.
+2. If a tool returned no data or an empty result, say so honestly. Never fabricate reminders, group names, messages, or confirmations that do not appear in the tool results.
+3. ${toolsWereCalled ? 'Tools were called — answer based strictly on what they returned.' : 'No tools were called — answer only from the system context provided.'}
+4. Do NOT prefix your response with "[Twersky]:" or any label. Write naturally as if speaking directly.
+5. ${useName ? `You may address the user naturally, but do NOT overuse their name.` : 'Do NOT use any name. Speak directly without addressing by name.'}
+6. Formatting rule: ${formattingStyle === 'double_newline' ? 'Insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' : 'Use clean natural formatting.'}
+
 Output strictly JSON:
 {
-  "response": "Your full response directly to ${userName}"
+  "response": "Your full response"
 }`;
 
     const step2Result = await callLLM(systemPrompt, step2Prompt);
-    let finalReply = step2Result.response || `I have noted that, ${userName}.`;
+    let finalReply = step2Result.response || 'Got it.';
+
+    // Strip any "[Twersky]:" or "[twersky]:" prefixes the model may add
+    finalReply = finalReply.replace(/\[twersky\]:\s*/gi, '').trim();
 
     if (formattingStyle === 'double_newline') {
       // Clean up spacing to guarantee double newlines between sentences
