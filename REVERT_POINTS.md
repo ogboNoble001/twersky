@@ -4,6 +4,25 @@ A log of stable checkpoints. Use `git checkout <commit>` or `git revert` to roll
 
 ---
 
+## Revert Point 0 — Stable Groq Response Quality (No Prefix, No Hallucinations)
+**Date:** 2026-11-16 01:21 WAT  
+**Git commit:** `6226554`  
+**Branch:** `main`
+
+### State at this point:
+- `[Twersky]:` prefix completely removed via regex + prompt rule.
+- No name-calling honored (`use_name: false`).
+- Groq model `openai/gpt-oss-120b` live as fallback.
+- Strictly grounded in tool results.
+- Verified live: 2 monitored groups and 0 reminders accurately reported on WhatsApp.
+
+### To revert:
+```bash
+git checkout 6226554
+```
+
+---
+
 ## Revert Point 1 — Before Groq Response Quality Fix
 **Date:** 2026-11-16 01:14 WAT  
 **Git commit:** `de45b8d`  

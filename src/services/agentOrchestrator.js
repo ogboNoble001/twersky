@@ -107,22 +107,34 @@ async function orchestrateUserCommand(payload) {
     const quotedText = payload.replyTo?.body || payload._data?.quotedMsg?.body || null;
     const quotedSender = payload.replyTo?.participant || payload._data?.quotedMsg?.author || null;
 
-    // 3. Gather database context
+    // 3. Gather permanent live database state (single source of truth for reminders, deadlines, groups, timetable)
     const { data: contacts } = await supabase
       .from('contacts')
       .select('display_name, role, phone_number')
       .limit(10);
 
-    const { data: recentAssignments } = await supabase
+    const { data: activeDeadlines } = await supabase
       .from('assignments')
-      .select('course_code, title, deadline_text, status')
-      .order('created_at', { ascending: false })
-      .limit(5);
+      .select('course_code, title, deadline_text, status, description, created_at')
+      .neq('status', 'completed')
+      .order('created_at', { ascending: false });
+
+    const { data: activeReminders } = await supabase
+      .from('reminders')
+      .select('id, course_code, topic, next_run_at, interval_minutes, is_stopped, is_done')
+      .eq('is_stopped', false)
+      .eq('is_done', false)
+      .order('next_run_at', { ascending: true });
 
     const { data: monitoredGroups } = await supabase
       .from('monitored_chats')
       .select('name, chat_id, is_active')
       .eq('is_active', true);
+
+    const { data: timetable } = await supabase
+      .from('timetable_entries')
+      .select('course_code, day_of_week, start_time, end_time, venue, is_cancelled_this_week')
+      .order('day_of_week', { ascending: true });
 
     // Fetch live WhatsApp groups with real titles from WAHA
     const liveGroups = await getWhatsAppGroups();
@@ -131,20 +143,48 @@ async function orchestrateUserCommand(payload) {
       member_count: g.member_count
     }));
 
+    const liveRemindersList = (activeReminders || []).map(r => ({
+      course: r.course_code || 'General',
+      topic: r.topic,
+      scheduled_for: r.next_run_at,
+      interval_minutes: r.interval_minutes
+    }));
+
+    const liveDeadlinesList = (activeDeadlines || []).map(d => ({
+      course: d.course_code,
+      title: d.title,
+      deadline: d.deadline_text,
+      status: d.status
+    }));
+
     const baselineContext = {
       owner_name: userName,
       user_preferences: userPreferences,
       recent_conversation_history: recentHistory,
       quoted_message: quotedText ? { sender: quotedSender, text: quotedText } : null,
-      active_monitored_groups: monitoredGroups || [],
+      live_system_state: {
+        active_reminders_count: liveRemindersList.length,
+        active_reminders: liveRemindersList,
+        active_deadlines_count: liveDeadlinesList.length,
+        active_deadlines: liveDeadlinesList,
+        monitored_groups_count: (monitoredGroups || []).length,
+        monitored_groups: (monitoredGroups || []).map(g => g.name),
+        timetable: (timetable || []).map(t => ({
+          course: t.course_code,
+          day: t.day_of_week,
+          time: `${t.start_time} - ${t.end_time}`,
+          venue: t.venue,
+          cancelled_this_week: t.is_cancelled_this_week
+        }))
+      },
       available_whatsapp_groups: availableGroups.length > 0 ? availableGroups : [
         { name: "OFFICIAL COMPUTER ENGINEERING 300LVL", member_count: 170 },
+        { name: "Testing_meez", member_count: 2 },
         { name: "300LVL COMPUTER ENGINEERING CRUISE GROUP", member_count: 174 },
         { name: "CPE assignment", member_count: 149 },
         { name: "Scholarship Region D9", member_count: 979 }
       ],
-      known_contacts: contacts || [],
-      recent_assignments: recentAssignments || []
+      known_contacts: contacts || []
     };
 
     // Step 1: Decision on tool calling
@@ -168,9 +208,11 @@ Available tools:
 11. query_context: { person_name, course_code, group_name } (use whenever user asks about what was said, last message in a group, or announcements)
 
 TOOL CALLING RULES:
-- If the user's request requires a tool, you MUST call it. Never pretend a tool ran without calling it.
-- If you are unsure which tool to call, call query_context to look up real data first.
-- tool_calls must be an empty array [] if no tool is needed.
+- System Context includes "live_system_state" (active_reminders, active_deadlines, monitored_groups, timetable). This is your live database ground truth.
+- If the user simply asks about current reminders, deadlines, monitored groups, or timetable (e.g. "how many reminders", "what deadlines do I have", "what groups are we monitoring"), the data is already right there in live_system_state; tool_calls can be [].
+- If the user asks to add, schedule, remove, stop, or modify reminders/assignments/groups, you MUST call the appropriate tool. Never pretend a tool ran without calling it.
+- If you are unsure or need message history from a group, call query_context.
+- tool_calls must be an empty array [] if no modification tool is needed.
 
 Output strictly JSON:
 {
@@ -211,12 +253,13 @@ User's Original Message:
 "${userText}"
 
 CRITICAL RULES FOR YOUR RESPONSE:
-1. ONLY use facts from "Tool Execution Results" above. Do NOT invent or assume any data not present there.
-2. If a tool returned no data or an empty result, say so honestly. Never fabricate reminders, group names, messages, or confirmations that do not appear in the tool results.
-3. ${toolsWereCalled ? 'Tools were called — answer based strictly on what they returned.' : 'No tools were called — answer only from the system context provided.'}
-4. Do NOT prefix your response with "[Twersky]:" or any label. Write naturally as if speaking directly.
-5. ${useName ? `You may address the user naturally, but do NOT overuse their name.` : 'Do NOT use any name. Speak directly without addressing by name.'}
-6. Formatting rule: ${formattingStyle === 'double_newline' ? 'Insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' : 'Use clean natural formatting.'}
+1. "live_system_state" in System Context is the PERMANENT SINGLE SOURCE OF TRUTH for active reminders, deadlines, monitored groups, and timetable. Whenever the user asks how many reminders, what deadlines, what groups, or what classes, refer directly to "live_system_state" with 100% accuracy, regardless of conversation history or previous topics.
+2. If live_system_state.active_reminders_count is 0, state clearly that there are currently 0 active reminders. Never invent or recall stopped reminders.
+3. If live_system_state.active_deadlines_count is 0, state clearly that there are currently no active deadlines.
+4. ${toolsWereCalled ? 'Tools were called — strictly combine the tool execution results with live_system_state. Never fabricate data that does not appear in either.' : 'No tools were called — answer strictly using live_system_state and system context.'}
+5. Do NOT prefix your response with "[Twersky]:" or any label. Write naturally as if speaking directly.
+6. ${useName ? `You may address the user naturally, but do NOT overuse their name.` : 'Do NOT use any name. Speak directly without addressing by name.'}
+7. Formatting rule: ${formattingStyle === 'double_newline' ? 'Insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' : 'Use clean natural formatting.'}
 
 Output strictly JSON:
 {
