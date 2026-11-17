@@ -1,5 +1,7 @@
 require('dotenv').config();
 const { tools } = require('../src/services/agentTools');
+const { extractAssignmentFromMessage } = require('../src/services/llm');
+const { verifyQuoteInMessage } = require('../src/utils/helpers');
 const supabase = require('../src/db/client');
 const axios = require('axios');
 
@@ -257,6 +259,43 @@ async function runTestSuite() {
   } catch (err) {
     assert(false, 'Render Endpoint: WAHA /ping responds 200 OK', err.message);
   }
+
+  // ----------------------------------------------------
+  // TEST SUITE 7: Proactive Alert Pipeline Gate Checks
+  // ----------------------------------------------------
+  console.log('\n--- SUITE 7: Proactive Alert Pipeline Gate Checks ---');
+
+  // Test 7.1: Casual Chatter produces null (zero spam)
+  const casualResult = await extractAssignmentFromMessage('lol who is coming to the cafeteria right now?');
+  assert(
+    casualResult === null,
+    'Zero Spam Gate: Casual chatter is completely ignored (returns null)',
+    JSON.stringify(casualResult)
+  );
+
+  // Test 7.2: Academic Announcement produces verified extraction
+  const academicResult = await extractAssignmentFromMessage(
+    'GET 301 report submission has been fixed for Friday morning at 9:00 AM'
+  );
+  assert(
+    academicResult !== null && academicResult.is_important === true && academicResult.course_code === 'GET 301',
+    'Proactive Alert Gate: Academic announcement correctly flagged as important with course code',
+    JSON.stringify(academicResult)
+  );
+
+  // Test 7.3: Verbatim quote verification prevents hallucinated quotes
+  const quoteCheckPass = verifyQuoteInMessage(
+    'GET 301 report submission has been fixed for Friday morning at 9:00 AM',
+    'report submission has been fixed'
+  );
+  const quoteCheckFail = verifyQuoteInMessage(
+    'GET 301 report submission has been fixed for Friday morning at 9:00 AM',
+    'submission is on Monday at 2:00 PM'
+  );
+  assert(
+    quoteCheckPass === true && quoteCheckFail === false,
+    'Quote Verification: Verbatim quotes succeed, hallucinated quotes rejected'
+  );
 
   // ----------------------------------------------------
   // Cleanup Test Data
