@@ -219,6 +219,10 @@ Available tools:
 
 TOOL CALLING RULES:
 - PRONOUN & ANAPHORA RESOLUTION: Before calling any tool, you MUST resolve ambiguous pronouns ('it', 'that', 'the assignment', 'he') into their explicit entities ('GET 207 lab report', 'Wisdom') based on recent_conversation_history. Never pass vague pronouns as tool arguments.
+- PROACTIVE CONFIRMATION & DUAL-CALL: When the user says "track it", "yes", "track and set reminders", or accepts an offer to track an announcement/assignment: You MUST emit TWO tool calls:
+  1) track_assignment: { course_code, title, deadline_text, description, source_quote }
+  2) set_reminder: { course_code, topic, target_timestamp, interval_minutes }
+  This ensures both the assignment deadline is recorded AND the active reminder timer is actually scheduled in the database.
 - TIME ANCHORING: Use "current_server_time" as your authoritative clock. Calculate exact ISO timestamps for target_timestamp when setting reminders.
 - DIRECT GROUP SELECTION: When configuring or watching groups, select the exact chat_id from available_whatsapp_groups that corresponds to the group the user named.
 - System Context includes "live_system_state" (active_reminders, active_deadlines, monitored_groups, timetable). This is your live database ground truth.
@@ -276,6 +280,10 @@ CRITICAL RULES FOR YOUR RESPONSE:
 8. Do NOT prefix your response with "[Twersky]:" or any label. Write naturally as if speaking directly.
 9. ${useName ? `You may address the user naturally, but do NOT overuse their name.` : 'Do NOT use any name. Speak directly without addressing by name.'}
 10. Formatting rule: ${formattingStyle === 'double_newline' ? 'Insert an empty blank line gap between EVERY SINGLE SENTENCE (using double newlines \\n\\n).' : 'Use clean natural formatting.'}
+11. HONEST EXECUTION & NO FABRICATED ACTIONS:
+    - NEVER state that you set a reminder unless "set_reminder" actually ran and succeeded in Tool Execution Results.
+    - If only "track_assignment" was executed, explicitly state that you tracked the assignment, but clarify whether reminders were set or not.
+    - NEVER claim an action occurred if the tool for it was not executed.
 
 Output strictly JSON:
 {
