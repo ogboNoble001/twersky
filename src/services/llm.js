@@ -32,6 +32,13 @@ function safeJsonParse(str) {
   }
 }
 
+function withTimeout(promise, ms, desc) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout of ${ms}ms exceeded for ${desc}`)), ms))
+  ]);
+}
+
 /**
  * Fallback to Groq when all Gemini keys are exhausted.
  */
@@ -45,15 +52,19 @@ async function callGroq(systemPrompt, userPrompt) {
 
   for (const model of models) {
     try {
-      const completion = await groq.chat.completions.create({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt + '\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation.' },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.3,
-        response_format: { type: 'json_object' }
-      });
+      const completion = await withTimeout(
+        groq.chat.completions.create({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt + '\n\nIMPORTANT: Output ONLY valid JSON. No markdown, no explanation.' },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.3,
+          response_format: { type: 'json_object' }
+        }),
+        25000,
+        `Groq model ${model}`
+      );
 
       const text = completion.choices[0]?.message?.content || '';
       console.log(`[LLM] Groq fallback used successfully with model: ${model}`);
@@ -79,11 +90,15 @@ async function callLLM(systemPrompt, userPrompt) {
     const currentKey = geminiKeys[(keyIndex + attempt) % geminiKeys.length];
     try {
       const ai = new GoogleGenAI({ apiKey: currentKey, apiVersion: 'v1beta' });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `${systemPrompt}\n\nTask:\n${userPrompt}`,
-        config: { responseMimeType: 'application/json' }
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: `${systemPrompt}\n\nTask:\n${userPrompt}`,
+          config: { responseMimeType: 'application/json' }
+        }),
+        25000,
+        `Gemini key #${(keyIndex + attempt) % geminiKeys.length}`
+      );
 
       const responseText = response.text || '';
       keyIndex = (keyIndex + attempt) % geminiKeys.length;

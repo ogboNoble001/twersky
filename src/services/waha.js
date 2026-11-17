@@ -13,6 +13,7 @@ const WAHA_SESSION = process.env.WAHA_SESSION || 'default';
 async function sendTextMessage(chatId, text) {
   try {
     const url = `${WAHA_API_URL}/api/sendText`;
+    console.log(`[WAHA] Sending text to ${chatId}...`);
     const response = await axios.post(
       url,
       {
@@ -24,9 +25,11 @@ async function sendTextMessage(chatId, text) {
         headers: {
           'Content-Type': 'application/json',
           ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {})
-        }
+        },
+        timeout: 15000
       }
     );
+    console.log(`[WAHA] Message delivered to WAHA queue for ${chatId}, id=${response.data?.key?.id || 'ok'}`);
     return response.data;
   } catch (error) {
     console.error(`[WAHA] Error sending text to ${chatId}:`, error.response?.data || error.message);

@@ -267,6 +267,7 @@ Output strictly JSON:
   "response": "Your full response"
 }`;
 
+    console.log('[Orchestrator] Generating Step 2 final response...');
     const step2Result = await callLLM(systemPrompt, step2Prompt);
     let finalReply = step2Result.response || 'Got it.';
 
@@ -281,11 +282,17 @@ Output strictly JSON:
         .trim();
     }
 
+    console.log(`[Orchestrator] Dispatching final reply to ${from}: "${finalReply.substring(0, 60)}..."`);
     await sendTextMessage(from, finalReply);
+    console.log(`[Orchestrator] Successfully sent reply to ${from}`);
 
   } catch (err) {
     console.error('[Orchestrator] Agent execution failed:', err);
-    await sendTextMessage(from, 'I ran into a temporary issue while checking that.\n\nPlease ask me again.');
+    try {
+      await sendTextMessage(from, 'I ran into a temporary issue while checking that.\n\nPlease ask me again.');
+    } catch (sendErr) {
+      console.error('[Orchestrator] Failed to send fallback error message:', sendErr.message);
+    }
   }
 }
 
