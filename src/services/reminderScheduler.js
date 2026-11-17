@@ -172,5 +172,6 @@ function initReminderScheduler() {
 
 module.exports = {
   initReminderScheduler,
-  processDueReminders
+  processDueReminders,
+  calculateEscalatingInterval
 };

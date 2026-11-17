@@ -87,6 +87,21 @@ async function runTestSuite() {
     `Got ${twoWeeksDate.toISOString()}`
   );
 
+  // Test 1.5: Direct ISO target_timestamp with adaptive escalating interval
+  const tomorrowIso = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const isoRes = await tools.set_reminder({
+    course_code: 'TEST105',
+    topic: 'test iso timestamp anchoring',
+    target_timestamp: tomorrowIso
+  });
+  const isoDate = new Date(isoRes.reminder.next_run_at);
+  const expectedIsoDate = new Date(tomorrowIso);
+  assert(
+    isoRes.success === true && isoDate.getTime() === expectedIsoDate.getTime(),
+    'Semantic Date: Direct ISO target_timestamp sets exact timestamp without regex',
+    JSON.stringify(isoRes)
+  );
+
   // ----------------------------------------------------
   // TEST SUITE 2: Reminder Collision & Auto-Cancellation
   // ----------------------------------------------------
@@ -183,6 +198,17 @@ async function runTestSuite() {
     Boolean(bogusGroupRes.error),
     'Group Resolver: Returns honest error when group name does not exist in live groups',
     JSON.stringify(bogusGroupRes)
+  );
+
+  // Test 4.4: Direct semantic chat_id selection from available groups
+  const directChatIdRes = await tools.configure_group({
+    chat_id: '120363427491645104@g.us',
+    name: 'Testing_meez'
+  });
+  assert(
+    directChatIdRes.success === true && directChatIdRes.group.chat_id === '120363427491645104@g.us',
+    'Semantic Group: Direct chat_id selection resolves cleanly without regex hacks',
+    JSON.stringify(directChatIdRes)
   );
 
   // ----------------------------------------------------

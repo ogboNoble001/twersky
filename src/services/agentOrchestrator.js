@@ -138,10 +138,19 @@ async function orchestrateUserCommand(payload) {
 
     // Fetch live WhatsApp groups with real titles from WAHA
     const liveGroups = await getWhatsAppGroups();
-    const availableGroups = liveGroups.map(g => ({
+    const availableGroups = (liveGroups || []).map(g => ({
+      chat_id: g.chat_id,
       name: g.name,
       member_count: g.member_count
     }));
+
+    const now = new Date();
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const currentServerTime = {
+      iso: now.toISOString(),
+      day_of_week: days[now.getDay()],
+      formatted: now.toLocaleString('en-US', { timeZone: 'Africa/Lagos' })
+    };
 
     const liveRemindersList = (activeReminders || []).map(r => ({
       id: r.id,
@@ -161,6 +170,7 @@ async function orchestrateUserCommand(payload) {
     const baselineContext = {
       owner_name: userName,
       user_preferences: userPreferences,
+      current_server_time: currentServerTime,
       recent_conversation_history: recentHistory,
       quoted_message: quotedText ? { sender: quotedSender, text: quotedText } : null,
       live_system_state: {
@@ -179,11 +189,10 @@ async function orchestrateUserCommand(payload) {
         }))
       },
       available_whatsapp_groups: availableGroups.length > 0 ? availableGroups : [
-        { name: "OFFICIAL COMPUTER ENGINEERING 300LVL", member_count: 170 },
-        { name: "Testing_meez", member_count: 2 },
-        { name: "300LVL COMPUTER ENGINEERING CRUISE GROUP", member_count: 174 },
-        { name: "CPE assignment", member_count: 149 },
-        { name: "Scholarship Region D9", member_count: 979 }
+        { chat_id: "120363427954073209@g.us", name: "OFFICIAL COMPUTER ENGINEERING 300LVL", member_count: 170 },
+        { chat_id: "120363427491645104@g.us", name: "Testing_meez", member_count: 2 },
+        { chat_id: "120363421234567890@g.us", name: "300LVL COMPUTER ENGINEERING CRUISE GROUP", member_count: 174 },
+        { chat_id: "120363429876543210@g.us", name: "CPE assignment", member_count: 149 }
       ],
       known_contacts: contacts || []
     };
@@ -196,12 +205,12 @@ User's WhatsApp Message:
 "${userText}"
 
 Available tools:
-1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (omit phone_number if referring to recent message)
+1. save_contact: { phone_number, display_name, role, trusted_for_class_changes } (use when user labels a contact e.g. "that's Wisdom" or "Wisdom is Course Rep". Omit phone_number to automatically resolve to the sender of the last discussed message)
 2. delete_contact: { display_name, phone_number } (use when user asks to delete or remove a contact)
 3. update_user_preference: { user_name, formatting_style, use_name } (if user says "stop calling my name", "don't call my name", pass use_name: false. If user says "call me [name]", pass user_name: [name], use_name: true)
-4. configure_group: { name, linked_to_group_name } (starts monitoring a group by its title e.g. "Testing_meez" or "OFFICIAL COMPUTER ENGINEERING 300LVL" — do NOT pass chat_id, the system automatically resolves the real WhatsApp ID)
+4. configure_group: { chat_id, name, linked_to_group_name } (select the exact chat_id and name directly from available_whatsapp_groups that matches the user's intent. Do not invent an ID not in the list)
 5. track_assignment: { course_code, title, deadline_text, description, source_quote, original_message }
-6. set_reminder: { course_code, topic, interval_minutes, scheduled_time, target_date } (target_date accepts natural language: 'tomorrow', 'this weekend', 'next week', 'in 2 days', 'in the next three days', 'in 4 hours', 'saturday', or any date string — the system resolves it automatically)
+6. set_reminder: { course_code, topic, target_timestamp, interval_minutes, scheduled_time } (calculate target_timestamp as an ISO 8601 string anchored to current_server_time. For example, if current_server_time is Tuesday 2pm and user asks for 'tomorrow morning', calculate Wednesday 08:00 AM ISO. Target dates automatically adapt reminder frequency as deadline nears)
 7. stop_reminders: { course_code, topic } (use when user says "stop", pauses reminders without marking assignment completed)
 8. mark_assignment_done: { course_code, title } (use when user says "done", "submitted", marks assignment completed and resolves reminders)
 9. update_class_status: { course_code, is_cancelled, reason }
@@ -209,6 +218,9 @@ Available tools:
 11. query_context: { person_name, course_code, group_name } (use whenever user asks about what was said, last message in a group, or announcements)
 
 TOOL CALLING RULES:
+- PRONOUN & ANAPHORA RESOLUTION: Before calling any tool, you MUST resolve ambiguous pronouns ('it', 'that', 'the assignment', 'he') into their explicit entities ('GET 207 lab report', 'Wisdom') based on recent_conversation_history. Never pass vague pronouns as tool arguments.
+- TIME ANCHORING: Use "current_server_time" as your authoritative clock. Calculate exact ISO timestamps for target_timestamp when setting reminders.
+- DIRECT GROUP SELECTION: When configuring or watching groups, select the exact chat_id from available_whatsapp_groups that corresponds to the group the user named.
 - System Context includes "live_system_state" (active_reminders, active_deadlines, monitored_groups, timetable). This is your live database ground truth.
 - If the user simply asks about current reminders, deadlines, monitored groups, or timetable (e.g. "how many reminders", "what deadlines do I have", "what groups are we monitoring"), the data is already right there in live_system_state; tool_calls can be [].
 - If the user asks to add, schedule, remove, stop, or modify reminders/assignments/groups, you MUST call the appropriate tool. Never pretend a tool ran without calling it.

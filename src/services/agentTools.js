@@ -1,6 +1,7 @@
 const supabase = require('../db/client');
 const { verifyQuoteInMessage } = require('../utils/helpers');
 const { getWhatsAppGroups, getChatMessages } = require('./waha');
+const { calculateEscalatingInterval } = require('./reminderScheduler');
 
 /**
  * Registry of tools available to the LLM Orchestrator
@@ -124,53 +125,49 @@ const tools = {
    */
   async configure_group({ chat_id, name, linked_to_group_name }) {
     let targetChatId = null;
-    const groupName = (name || '').trim();
+    let targetName = (name || '').trim();
 
-    if (!groupName && !chat_id) {
-      return { error: 'Please provide the name of the group to monitor.' };
+    // 1. Fetch live groups that the bot currently participates in on WhatsApp
+    const liveGroups = await getWhatsAppGroups();
+
+    // 2. Direct semantic selection: If LLM selected the exact chat_id from available groups
+    if (chat_id && chat_id.endsWith('@g.us')) {
+      const directMatch = (liveGroups || []).find(g => g.chat_id === chat_id);
+      if (directMatch) {
+        targetChatId = directMatch.chat_id;
+        targetName = targetName || directMatch.name;
+      }
     }
 
-    // 1. Search live groups from WAHA by title (case-insensitive, normalized)
-    const liveGroups = await getWhatsAppGroups();
-    if (liveGroups && liveGroups.length > 0 && groupName) {
-      const cleanTarget = groupName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    // 3. Match by group title against live groups (normalized)
+    if (!targetChatId && targetName && liveGroups && liveGroups.length > 0) {
+      const cleanTarget = targetName.toLowerCase().replace(/[^a-z0-9]/g, '');
       const matched = liveGroups.find(g => {
         const cleanG = (g.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
         return cleanG.includes(cleanTarget) || cleanTarget.includes(cleanG);
       });
       if (matched) {
         targetChatId = matched.chat_id;
+        targetName = matched.name;
       }
     }
 
-    // 2. Check if already known in monitored_chats by name
-    if (!targetChatId && groupName) {
+    // 4. Check if already known in monitored_chats by title
+    if (!targetChatId && targetName) {
       const { data: existing } = await supabase
         .from('monitored_chats')
-        .select('chat_id')
-        .ilike('name', `%${groupName}%`)
+        .select('chat_id, name')
+        .ilike('name', `%${targetName}%`)
         .maybeSingle();
       if (existing) {
         targetChatId = existing.chat_id;
-      }
-    }
-
-    // 3. Fallback: Check if recent raw_messages has this group directly
-    if (!targetChatId && chat_id && chat_id.endsWith('@g.us')) {
-      const { data: rawMsg } = await supabase
-        .from('raw_messages')
-        .select('chat_id')
-        .eq('chat_id', chat_id)
-        .limit(1)
-        .maybeSingle();
-      if (rawMsg) {
-        targetChatId = rawMsg.chat_id;
+        targetName = existing.name || targetName;
       }
     }
 
     if (!targetChatId) {
       return {
-        error: `Could not find a group matching "${groupName}". Please ensure the bot's second line is added to that group.`
+        error: `Could not find a group matching "${targetName || chat_id}". Please ensure the bot's second line is added to that group.`
       };
     }
 
@@ -188,7 +185,7 @@ const tools = {
       .from('monitored_chats')
       .upsert({
         chat_id: targetChatId,
-        name: groupName || 'Group Chat',
+        name: targetName || 'Group Chat',
         is_active: true,
         linked_chat_id
       })
@@ -265,10 +262,16 @@ const tools = {
   /**
    * Schedule or update a reminder
    */
-  async set_reminder({ course_code, topic, interval_minutes, scheduled_time, target_date }) {
+  async set_reminder({ course_code, topic, interval_minutes, scheduled_time, target_date, target_timestamp }) {
     let nextRun = new Date();
 
-    if (target_date) {
+    // 1. Direct semantic ISO timestamp from LLM
+    if (target_timestamp) {
+      const parsedIso = new Date(target_timestamp);
+      if (!isNaN(parsedIso.getTime())) {
+        nextRun = parsedIso;
+      }
+    } else if (target_date) {
       const str = target_date.toLowerCase().trim();
       const numMap = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 
@@ -329,6 +332,9 @@ const tools = {
       nextRun.setMinutes(nextRun.getMinutes() + (interval_minutes || 60));
     }
 
+    // Adaptive urgency interval: dynamically escalate as target approaches if not explicitly specified
+    const effectiveInterval = interval_minutes || calculateEscalatingInterval(60, nextRun.toISOString());
+
     // Always deactivate existing active reminders for this topic or course so old intervals don't collide
     let oldQuery = supabase.from('reminders').update({ is_stopped: true }).eq('is_stopped', false);
     if (course_code) {
@@ -343,7 +349,7 @@ const tools = {
       .insert({
         course_code: course_code ? course_code.toUpperCase() : null,
         topic: topic || 'Review deadline',
-        interval_minutes: interval_minutes || 60,
+        interval_minutes: effectiveInterval,
         scheduled_times: scheduled_time ? [scheduled_time] : null,
         next_run_at: nextRun.toISOString()
       })
