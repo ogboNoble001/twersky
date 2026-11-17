@@ -4,6 +4,26 @@ A log of stable checkpoints. Use `git checkout <commit>` or `git revert` to roll
 
 ---
 
+## Revert Point 00 — Robust "done"/"stop" Resolution & Live System State
+**Date:** 2026-11-17 09:21 WAT  
+**Git commit:** `425e555`  
+**Branch:** `main`
+
+### State at this point:
+- `mark_assignment_done` and `stop_reminders` updated to handle null course_code, filtering out 'General' placeholders.
+- If user simply says "done" or "stop", it resolves all currently active/due reminders.
+- `live_system_state` injected on every turn as single source of truth for active reminders, deadlines, monitored groups, and timetable.
+- Tested: rogue 20-minute reminder deactivated, 0 active reminders remaining.
+- Internal 8-minute keep-alive ping running to keep Render awake.
+- GitHub push configured to HTTP/1.1 with PAT.
+
+### To revert:
+```bash
+git checkout 425e555
+```
+
+---
+
 ## Revert Point 0 — Stable Groq Response Quality (No Prefix, No Hallucinations)
 **Date:** 2026-11-16 01:21 WAT  
 **Git commit:** `6226554`  
