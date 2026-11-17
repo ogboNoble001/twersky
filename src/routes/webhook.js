@@ -51,6 +51,25 @@ router.post('/whatsapp', async (req, res) => {
     const actualSender = sender || from;
     const isDirectMessage = !from.endsWith('@g.us');
 
+    // Rule 3: Drop newsletter channel messages entirely — they are broadcast-only noise
+    if (from.endsWith('@newsletter')) {
+      return res.status(200).json({ status: 'ignored_newsletter' });
+    }
+
+    // Rule 4: For group messages, only save if the group is in our monitored_chats table
+    if (from.endsWith('@g.us')) {
+      const { data: monitoredGroup } = await supabase
+        .from('monitored_chats')
+        .select('id')
+        .eq('chat_id', from)
+        .single();
+
+      if (!monitoredGroup) {
+        // Not a monitored group — silently ignore
+        return res.status(200).json({ status: 'ignored_unmonitored_group' });
+      }
+    }
+
     console.log(`[Webhook] Incoming message from: ${actualSender} in chat: ${from}`);
 
     // Check if message is a direct command from the main user
