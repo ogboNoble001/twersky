@@ -217,24 +217,32 @@ const tools = {
    */
   async mark_assignment_done({ course_code, title }) {
     let query = supabase.from('assignments').update({ status: 'completed' });
-    let reminderQuery = supabase.from('reminders').update({ is_done: true });
+    let reminderQuery = supabase.from('reminders').update({ is_done: true }).eq('is_done', false);
 
-    if (course_code) {
-      const code = course_code.toUpperCase();
-      query = query.ilike('course_code', `%${code}%`);
-      reminderQuery = reminderQuery.ilike('course_code', `%${code}%`);
+    // Filter out placeholder strings
+    const cleanCourse = (course_code && !['general', 'null', 'none'].includes(course_code.toLowerCase())) 
+      ? course_code.toUpperCase().trim() 
+      : null;
+
+    if (cleanCourse) {
+      query = query.ilike('course_code', `%${cleanCourse}%`);
+      reminderQuery = reminderQuery.ilike('course_code', `%${cleanCourse}%`);
     } else if (title) {
       query = query.ilike('title', `%${title}%`);
       reminderQuery = reminderQuery.ilike('topic', `%${title}%`);
+    } else {
+      // If user simply said "done" without specific course/title, resolve all currently active reminders
+      reminderQuery = reminderQuery.eq('is_stopped', false);
     }
 
     const { data: updatedAssignments } = await query.select();
-    await reminderQuery;
+    const { data: updatedReminders } = await reminderQuery.select();
 
     return {
       success: true,
       message: 'Assignment marked as completed and reminders resolved.',
-      completed: updatedAssignments
+      completed_assignments: updatedAssignments?.length || 0,
+      completed_reminders: updatedReminders?.length || 0
     };
   },
 
@@ -392,8 +400,13 @@ const tools = {
    */
   async stop_reminders({ course_code, topic }) {
     let query = supabase.from('reminders').update({ is_stopped: true }).eq('is_stopped', false);
-    if (course_code) {
-      query = query.ilike('course_code', `%${course_code.toUpperCase()}%`);
+
+    const cleanCourse = (course_code && !['general', 'null', 'none'].includes(course_code.toLowerCase())) 
+      ? course_code.toUpperCase().trim() 
+      : null;
+
+    if (cleanCourse) {
+      query = query.ilike('course_code', `%${cleanCourse}%`);
     } else if (topic) {
       query = query.ilike('topic', `%${topic}%`);
     }

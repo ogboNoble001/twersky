@@ -144,7 +144,8 @@ async function orchestrateUserCommand(payload) {
     }));
 
     const liveRemindersList = (activeReminders || []).map(r => ({
-      course: r.course_code || 'General',
+      id: r.id,
+      course: r.course_code || null,
       topic: r.topic,
       scheduled_for: r.next_run_at,
       interval_minutes: r.interval_minutes
