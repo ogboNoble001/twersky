@@ -112,7 +112,19 @@ async function processDueReminders() {
 
       // Direct delivery 24/7: No quiet hours or suppression
       // 2. Compose the reminder message
-      const assignment = reminder.assignments;
+      let assignment = reminder.assignments;
+      if (!assignment && reminder.course_code) {
+        const { data: matchedAssign } = await supabase
+          .from('assignments')
+          .select('deadline_text, deadline_timestamp')
+          .ilike('course_code', `%${reminder.course_code}%`)
+          .neq('status', 'completed')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (matchedAssign) assignment = matchedAssign;
+      }
+
       const deadlineInfo = assignment?.deadline_text ? `Deadline is ${assignment.deadline_text}.` : 'Deadline details not specified.';
       const coursePrefix = course_code ? `[${course_code}] ` : '';
       const prefix = useName ? `${userName}, this is your reminder for ${coursePrefix}${topic}.` : `This is your reminder for ${coursePrefix}${topic}.`;
@@ -149,13 +161,90 @@ Reply "done" when you complete it, or "stop" to pause reminders for this.`;
 }
 
 /**
+ * Scans for pending assignments that do not have an active reminder scheduled.
+ * Sends a persistent nudge every 3 hours so deadlines are never forgotten.
+ */
+async function processUntrackedDeadlineNudges() {
+  try {
+    const { data: pendingAssignments, error } = await supabase
+      .from('assignments')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+
+    if (error || !pendingAssignments || pendingAssignments.length === 0) return;
+
+    const { data: prefRow } = await supabase
+      .from('monitored_chats')
+      .select('name')
+      .eq('chat_id', 'user_preferences')
+      .maybeSingle();
+
+    let userPreferences = { target_chat: null };
+    if (prefRow && prefRow.name) {
+      try { userPreferences = { ...userPreferences, ...JSON.parse(prefRow.name) }; } catch (e) {}
+    }
+    const targetChat = userPreferences.target_chat || (OWNER_PHONE.includes('@') ? OWNER_PHONE : `${OWNER_PHONE}@c.us`);
+    if (!targetChat) return;
+
+    const now = Date.now();
+    const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+
+    for (const assignment of pendingAssignments) {
+      let reminderCheck = supabase
+        .from('reminders')
+        .select('id')
+        .eq('is_done', false)
+        .eq('is_stopped', false);
+
+      if (assignment.course_code) {
+        reminderCheck = reminderCheck.ilike('course_code', `%${assignment.course_code}%`);
+      } else {
+        reminderCheck = reminderCheck.eq('assignment_id', assignment.id);
+      }
+
+      const { data: existingReminders } = await reminderCheck.limit(1);
+      if (existingReminders && existingReminders.length > 0) {
+        continue;
+      }
+
+      const lastCheckTime = new Date(assignment.updated_at || assignment.created_at).getTime();
+      if (now - lastCheckTime < THREE_HOURS_MS) {
+        continue;
+      }
+
+      const courseLabel = assignment.course_code ? `[${assignment.course_code}]` : (assignment.title || 'Assignment');
+      const deadlineLabel = assignment.deadline_text || 'not specified';
+      const quoteExcerpt = assignment.source_quote ? `\n\n"${assignment.source_quote}"` : '';
+
+      const nudgeText = `Reminder: You have an untracked deadline for ${courseLabel}.${quoteExcerpt}\n\nDeadline: ${deadlineLabel}\n\nWould you like me to set reminders for this?\n\nReply "track it" to start reminders, or "dismiss" to ignore.`;
+
+      await sendTextMessage(targetChat, nudgeText);
+      console.log(`[NudgeDaemon] Sent persistent nudge for unaddressed deadline ${assignment.id} (${courseLabel})`);
+
+      await supabase
+        .from('assignments')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', assignment.id);
+    }
+  } catch (err) {
+    console.error('[NudgeDaemon] Error in processUntrackedDeadlineNudges:', err.message);
+  }
+}
+
+/**
  * Initializes and starts the background reminder cron daemon
  */
 function initReminderScheduler() {
   console.log('[Scheduler] Initializing background reminder daemon (every minute)...');
-  // Run every minute
+  // Run every minute for due reminders
   cron.schedule('* * * * *', async () => {
     await processDueReminders();
+  });
+
+  // Run every 15 minutes for persistent nudges of untracked deadlines
+  cron.schedule('*/15 * * * *', async () => {
+    await processUntrackedDeadlineNudges();
   });
 
   // Keep-alive ping every 8 minutes to prevent Render free-tier containers from sleeping
@@ -173,5 +262,6 @@ function initReminderScheduler() {
 module.exports = {
   initReminderScheduler,
   processDueReminders,
+  processUntrackedDeadlineNudges,
   calculateEscalatingInterval
 };

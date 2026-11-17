@@ -216,6 +216,8 @@ Available tools:
 9. update_class_status: { course_code, is_cancelled, reason }
 10. remove_assignment: { course_code, remove_all }
 11. query_context: { person_name, course_code, group_name } (use whenever user asks about what was said, last message in a group, or announcements)
+12. configure_group_auto_track: { chat_id, group_name, auto_track } (use when user asks to turn on/off automatic tracking and reminders for a specific group e.g. "turn on auto reminders for Testing_meez" or "stop auto-tracking official group")
+13. dismiss_deadline: { course_code, title } (use when user says "dismiss", "ignore", "don't remind me about that deadline" for an unaddressed announcement so persistent nudges stop)
 
 TOOL CALLING RULES:
 - PRONOUN & ANAPHORA RESOLUTION: Before calling any tool, you MUST resolve ambiguous pronouns ('it', 'that', 'the assignment', 'he') into their explicit entities ('GET 207 lab report', 'Wisdom') based on recent_conversation_history. Never pass vague pronouns as tool arguments.

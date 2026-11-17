@@ -5,6 +5,7 @@ const { isAuthorizedUser, normalizePhone } = require('../utils/helpers');
 const { orchestrateUserCommand } = require('../services/agentOrchestrator');
 const { extractAssignmentFromMessage } = require('../services/llm');
 const { sendTextMessage } = require('../services/waha');
+const { tools } = require('../services/agentTools');
 
 // In-memory cache to prevent duplicate webhook delivery within 10 seconds
 const processedMessageIds = new Set();
@@ -201,41 +202,78 @@ async function runProactiveAlertPipeline({ messageId, chatId, actualSender, altS
       }
     }
 
-    // Step 4: Fetch user's target_chat (where to send the DM)
+    // Step 4: Fetch user's target_chat and auto_track preferences
     const { data: prefRow } = await supabase
       .from('monitored_chats')
       .select('name')
       .eq('chat_id', 'user_preferences')
       .maybeSingle();
 
-    let targetChat = null;
+    let userPrefs = {};
     if (prefRow && prefRow.name) {
-      try {
-        const prefs = JSON.parse(prefRow.name);
-        targetChat = prefs.target_chat || null;
-      } catch {}
+      try { userPrefs = JSON.parse(prefRow.name); } catch(e) {}
     }
 
+    const targetChat = userPrefs.target_chat || null;
     if (!targetChat) {
       console.warn('[ProactiveAlert] No target_chat in user_preferences — cannot DM user. Skipping.');
       return;
     }
 
-    // Step 5: Build the DM text
-    // Keep it clean: who, where, verbatim quote, proactive offer.
-    // No emojis, no bullets, double newlines between sentences.
+    // Official group auto-tracks by default; others require confirmation
+    const autoTrackGroups = Array.isArray(userPrefs.auto_track_groups)
+      ? userPrefs.auto_track_groups
+      : ['120363427954073209@g.us'];
+    const isAutoTrack = autoTrackGroups.includes(chatId);
+
     const verbatimQuote = extraction.quote || body;
     const deadlineNote = extraction.deadline_text
       ? `\n\nDeadline: ${extraction.deadline_text}`
       : '';
 
-    const alertText =
-      `${resolvedSender} just posted in ${groupTitle}:\n\n` +
-      `"${verbatimQuote}"` +
-      `${deadlineNote}\n\n` +
-      `Would you like me to track this and set reminders for you?`;
+    let alertText = '';
 
-    // Step 6: Send DM
+    if (isAutoTrack) {
+      // 1. Auto-track: record assignment AND schedule reminders immediately
+      console.log(`[ProactiveAlert] Auto-tracking active for group ${chatId}. Scheduling reminders automatically.`);
+      await tools.track_assignment({
+        course_code: extraction.course_code,
+        title: extraction.title || `${extraction.course_code || 'Course'} Deadline`,
+        deadline_text: extraction.deadline_text,
+        description: extraction.description,
+        source_quote: extraction.quote
+      });
+
+      await tools.set_reminder({
+        course_code: extraction.course_code,
+        topic: extraction.title || `${extraction.course_code || 'Course'} submission`,
+        target_date: extraction.deadline_text
+      });
+
+      alertText =
+        `${resolvedSender} just posted in ${groupTitle}:\n\n` +
+        `"${verbatimQuote}"` +
+        `${deadlineNote}\n\n` +
+        `I have automatically tracked this deadline and scheduled reminders for you.\n\n` +
+        `Reply "stop" to cancel, or let me know if you would like to adjust the time.`;
+    } else {
+      // 2. Manual confirmation: save assignment as pending so persistent nudge can remind user if forgotten
+      await tools.track_assignment({
+        course_code: extraction.course_code,
+        title: extraction.title || `${extraction.course_code || 'Course'} Deadline`,
+        deadline_text: extraction.deadline_text,
+        description: extraction.description,
+        source_quote: extraction.quote
+      });
+
+      alertText =
+        `${resolvedSender} just posted in ${groupTitle}:\n\n` +
+        `"${verbatimQuote}"` +
+        `${deadlineNote}\n\n` +
+        `Would you like me to track this and set reminders for you?`;
+    }
+
+    // Step 5: Send DM
     console.log(`[ProactiveAlert] Sending alert to ${targetChat}...`);
     await sendTextMessage(targetChat, alertText);
     console.log(`[ProactiveAlert] Alert sent successfully for message ${messageId}.`);

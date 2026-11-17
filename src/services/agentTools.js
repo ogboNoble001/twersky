@@ -196,6 +196,78 @@ const tools = {
   },
 
   /**
+   * Toggles automatic tracking & reminders for a specific group
+   */
+  async configure_group_auto_track({ chat_id, group_name, auto_track = true }) {
+    let targetChatId = chat_id;
+    if (!targetChatId && group_name) {
+      const { data: matched } = await supabase
+        .from('monitored_chats')
+        .select('chat_id, name')
+        .ilike('name', `%${group_name}%`)
+        .maybeSingle();
+      if (matched) targetChatId = matched.chat_id;
+    }
+
+    if (!targetChatId) {
+      return { error: 'Please specify which group to configure auto-tracking for.' };
+    }
+
+    const { data: prefRow } = await supabase
+      .from('monitored_chats')
+      .select('name')
+      .eq('chat_id', 'user_preferences')
+      .maybeSingle();
+
+    let prefs = {};
+    if (prefRow && prefRow.name) {
+      try { prefs = JSON.parse(prefRow.name); } catch(e) {}
+    }
+
+    let autoGroups = Array.isArray(prefs.auto_track_groups) ? prefs.auto_track_groups : ['120363427954073209@g.us'];
+    if (auto_track) {
+      if (!autoGroups.includes(targetChatId)) autoGroups.push(targetChatId);
+    } else {
+      autoGroups = autoGroups.filter(id => id !== targetChatId);
+    }
+
+    prefs.auto_track_groups = autoGroups;
+
+    await supabase
+      .from('monitored_chats')
+      .update({ name: JSON.stringify(prefs) })
+      .eq('chat_id', 'user_preferences');
+
+    return {
+      success: true,
+      chat_id: targetChatId,
+      auto_track: Boolean(auto_track),
+      message: `Auto-tracking ${auto_track ? 'enabled' : 'disabled'} for ${targetChatId}.`
+    };
+  },
+
+  /**
+   * Dismiss an untracked assignment announcement (stop nagging/nudges)
+   */
+  async dismiss_deadline({ course_code, title }) {
+    let query = supabase.from('assignments').update({ status: 'dismissed' }).eq('status', 'pending');
+    if (course_code) {
+      query = query.ilike('course_code', `%${course_code}%`);
+    } else if (title) {
+      query = query.ilike('title', `%${title}%`);
+    }
+
+    const { data, error } = await query.select();
+    if (error) return { error: error.message };
+
+    return {
+      success: true,
+      message: 'Deadline dismissed. You will not receive further nudges for this.',
+      dismissed_count: data?.length || 0
+    };
+  },
+
+  /**
    * Mark an assignment as completed ("done") and resolve its reminders
    */
   async mark_assignment_done({ course_code, title }) {
@@ -344,9 +416,23 @@ const tools = {
     }
     await oldQuery;
 
+    let linkedAssignmentId = null;
+    if (course_code) {
+      const { data: matchedAssign } = await supabase
+        .from('assignments')
+        .select('id')
+        .ilike('course_code', `%${course_code}%`)
+        .neq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (matchedAssign) linkedAssignmentId = matchedAssign.id;
+    }
+
     const { data, error } = await supabase
       .from('reminders')
       .insert({
+        assignment_id: linkedAssignmentId,
         course_code: course_code ? course_code.toUpperCase() : null,
         topic: topic || 'Review deadline',
         interval_minutes: effectiveInterval,

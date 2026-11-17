@@ -298,11 +298,51 @@ async function runTestSuite() {
   );
 
   // ----------------------------------------------------
+  // TEST SUITE 8: Auto-Tracking, Linked Deadlines & Dismiss
+  // ----------------------------------------------------
+  console.log('\n--- SUITE 8: Auto-Tracking, Linked Deadlines & Dismiss ---');
+
+  // Test 8.1: configure_group_auto_track toggles auto-track
+  const autoTrackRes = await tools.configure_group_auto_track({
+    chat_id: '120363427954073209@g.us',
+    auto_track: true
+  });
+  assert(
+    autoTrackRes.success === true && autoTrackRes.auto_track === true,
+    'Auto-Track Config: Successfully configures auto-tracking for group'
+  );
+
+  // Test 8.2: Track assignment then set reminder links assignment_id automatically
+  await tools.track_assignment({
+    course_code: 'TEST801',
+    title: 'Lab Report',
+    deadline_text: 'Thursday 10:00 AM'
+  });
+  const rem8Res = await tools.set_reminder({
+    course_code: 'TEST801',
+    topic: 'Submit Lab Report',
+    target_date: 'tomorrow'
+  });
+  assert(
+    rem8Res.success === true && rem8Res.reminder.assignment_id !== null,
+    'Linked Deadlines: set_reminder automatically links assignment_id when assignment exists',
+    `assignment_id = ${rem8Res.reminder?.assignment_id}`
+  );
+
+  // Test 8.3: dismiss_deadline marks pending assignment dismissed
+  const dismissRes = await tools.dismiss_deadline({ course_code: 'TEST801' });
+  assert(
+    dismissRes.success === true && dismissRes.dismissed_count >= 1,
+    'Dismiss Deadline: Successfully dismisses unaddressed deadline to prevent further nudges'
+  );
+
+  // ----------------------------------------------------
   // Cleanup Test Data
   // ----------------------------------------------------
   console.log('\n--- Cleaning up test artifacts from database ---');
   await supabase.from('reminders').delete().ilike('course_code', 'TEST%');
   await supabase.from('reminders').delete().ilike('topic', '%general task%');
+  await supabase.from('assignments').delete().ilike('course_code', 'TEST%');
 
   console.log('\n====================================================');
   console.log(`TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);
