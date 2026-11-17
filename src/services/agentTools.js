@@ -155,7 +155,7 @@ const tools = {
       }
     }
 
-    // 3. Fallback: Check if recent raw_messages has this group
+    // 3. Fallback: Check if recent raw_messages has this group directly
     if (!targetChatId && chat_id && chat_id.endsWith('@g.us')) {
       const { data: rawMsg } = await supabase
         .from('raw_messages')
@@ -165,20 +165,6 @@ const tools = {
         .maybeSingle();
       if (rawMsg) {
         targetChatId = rawMsg.chat_id;
-      }
-    }
-
-    // 4. If still not found, check the most recent incoming group message in raw_messages
-    if (!targetChatId) {
-      const { data: latestGroupMsg } = await supabase
-        .from('raw_messages')
-        .select('chat_id')
-        .ilike('chat_id', '%@g.us%')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (latestGroupMsg && latestGroupMsg.chat_id) {
-        targetChatId = latestGroupMsg.chat_id;
       }
     }
 
@@ -478,7 +464,7 @@ const tools = {
       }
     }
 
-    // Fetch messages from Supabase raw_messages
+    // Fetch messages from Supabase raw_messages (only from monitored groups)
     let msgQuery = supabase
       .from('raw_messages')
       .select('body, sender_id, sender_name, timestamp, created_at, chat_id')
@@ -487,6 +473,15 @@ const tools = {
 
     if (targetChatId) {
       msgQuery = msgQuery.eq('chat_id', targetChatId);
+    } else {
+      const { data: activeMonitored } = await supabase
+        .from('monitored_chats')
+        .select('chat_id')
+        .eq('is_active', true);
+      const activeIds = (activeMonitored || []).map(g => g.chat_id).filter(id => id && id.endsWith('@g.us'));
+      if (activeIds.length > 0) {
+        msgQuery = msgQuery.in('chat_id', activeIds);
+      }
     }
 
     let { data: messages } = await msgQuery;
