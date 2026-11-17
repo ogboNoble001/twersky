@@ -28,6 +28,7 @@ router.post('/whatsapp', async (req, res) => {
       from,             // JID of chat (can be group e.g. 123@g.us or user 234...@c.us or @lid)
       fromMe,           // Boolean: was this sent by the bot's line itself?
       sender,           // In groups, the participant's JID
+      participant,      // WAHA field for group participant
       body,
       hasMedia,
       media,
@@ -50,7 +51,9 @@ router.post('/whatsapp', async (req, res) => {
       setTimeout(() => processedMessageIds.delete(messageId), 15000);
     }
 
-    const actualSender = sender || from;
+    const actualSender = sender || participant || payload._data?.key?.participant || from;
+    const altSender = payload._data?.key?.participantAlt || payload._data?.key?.remoteJidAlt || null;
+    const senderDisplayName = payload._data?.pushName || payload._data?.notifyName || null;
     const isDirectMessage = !from.endsWith('@g.us');
 
     // Rule 3: Drop newsletter channel messages entirely — they are broadcast-only noise
@@ -58,13 +61,18 @@ router.post('/whatsapp', async (req, res) => {
       return res.status(200).json({ status: 'ignored_newsletter' });
     }
 
-    // Rule 4: For group messages, only save if the group is in our monitored_chats table
+    // Rule 4: For group messages, only save if the group is in our monitored_chats table and active
     if (from.endsWith('@g.us')) {
-      const { data: monitoredGroup } = await supabase
+      const { data: monitoredGroup, error: groupErr } = await supabase
         .from('monitored_chats')
-        .select('id')
+        .select('chat_id, is_active')
         .eq('chat_id', from)
-        .single();
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (groupErr) {
+        console.error('[Webhook] Error querying monitored_chats:', groupErr.message);
+      }
 
       if (!monitoredGroup) {
         // Not a monitored group — silently ignore
@@ -72,7 +80,7 @@ router.post('/whatsapp', async (req, res) => {
       }
     }
 
-    console.log(`[Webhook] Incoming message from: ${actualSender} in chat: ${from}`);
+    console.log(`[Webhook] Incoming message from: ${actualSender} (${senderDisplayName || 'unknown'}) in chat: ${from}`);
 
     // Check if message is a direct command from the main user
     const authorizedUser = process.env.USER_PHONE_NUMBER;
@@ -87,7 +95,7 @@ router.post('/whatsapp', async (req, res) => {
       id: messageId,
       chat_id: from,
       sender_id: actualSender,
-      sender_name: payload._data?.notifyName || null,
+      sender_name: senderDisplayName,
       body: body || '',
       has_media: Boolean(hasMedia),
       media_url: media?.url || null,
@@ -108,7 +116,8 @@ router.post('/whatsapp', async (req, res) => {
         messageId,
         chatId: from,
         actualSender,
-        senderName: payload._data?.notifyName || null,
+        altSender,
+        senderName: senderDisplayName,
         body: body.trim()
       }));
     }
@@ -133,7 +142,7 @@ module.exports = router;
  * 2. If not → stay silent.
  * 3. If yes → resolve sender name, fetch group title, DM the user.
  */
-async function runProactiveAlertPipeline({ messageId, chatId, actualSender, senderName, body }) {
+async function runProactiveAlertPipeline({ messageId, chatId, actualSender, altSender, senderName, body }) {
   try {
     console.log(`[ProactiveAlert] Analyzing message ${messageId} from ${chatId}...`);
 
@@ -148,18 +157,22 @@ async function runProactiveAlertPipeline({ messageId, chatId, actualSender, send
     console.log(`[ProactiveAlert] IMPORTANT message detected! course=${extraction.course_code}, deadline=${extraction.deadline_text}`);
 
     // Step 2: Resolve sender display name
-    // Try contacts table first (by normalised phone number)
-    const senderPhone = actualSender.replace(/@.*$/, '').replace(/\D/g, '');
+    // Try contacts table first (by normalised phone number from actualSender or altSender)
+    const phoneCandidates = [
+      actualSender ? actualSender.replace(/@.*$/, '').replace(/\D/g, '') : '',
+      altSender ? altSender.replace(/@.*$/, '').replace(/\D/g, '') : ''
+    ].filter(Boolean);
+
     const { data: contactRows } = await supabase
       .from('contacts')
-      .select('display_name, role')
+      .select('display_name, role, phone_number')
       .limit(20);
 
-    let resolvedSender = senderName || senderPhone; // fallback
+    let resolvedSender = senderName || phoneCandidates[0] || 'Someone';
     if (contactRows && contactRows.length > 0) {
       const match = contactRows.find(c => {
         const cp = (c.phone_number || '').replace(/\D/g, '');
-        return cp && cp === senderPhone;
+        return cp && phoneCandidates.includes(cp);
       });
       if (match) {
         resolvedSender = match.role
