@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../db/client');
-const { isAuthorizedUser } = require('../utils/helpers');
+const { isAuthorizedUser, normalizePhone } = require('../utils/helpers');
 const { orchestrateUserCommand } = require('../services/agentOrchestrator');
+const { extractAssignmentFromMessage } = require('../services/llm');
+const { sendTextMessage } = require('../services/waha');
 
 // In-memory cache to prevent duplicate webhook delivery within 10 seconds
 const processedMessageIds = new Set();
@@ -99,6 +101,19 @@ router.post('/whatsapp', async (req, res) => {
       console.log(`[Webhook] Saved raw message ${messageId} from ${actualSender}`);
     }
 
+    // ─── PROACTIVE ALERT PIPELINE ────────────────────────────────────────────
+    // Runs async after returning 200 — does not block webhook response.
+    if (body && body.trim()) {
+      setImmediate(() => runProactiveAlertPipeline({
+        messageId,
+        chatId: from,
+        actualSender,
+        senderName: payload._data?.notifyName || null,
+        body: body.trim()
+      }));
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     return res.status(200).json({ status: 'saved' });
   } catch (err) {
     console.error('[Webhook] Error processing event:', err);
@@ -107,4 +122,114 @@ router.post('/whatsapp', async (req, res) => {
 });
 
 module.exports = router;
+
+/**
+ * Proactive Alert Pipeline
+ * Triggered after every group message is saved.
+ * Runs fully async — never blocks the webhook response.
+ *
+ * Steps:
+ * 1. Run AI gate check: is this message academically important?
+ * 2. If not → stay silent.
+ * 3. If yes → resolve sender name, fetch group title, DM the user.
+ */
+async function runProactiveAlertPipeline({ messageId, chatId, actualSender, senderName, body }) {
+  try {
+    console.log(`[ProactiveAlert] Analyzing message ${messageId} from ${chatId}...`);
+
+    // Step 1: AI gate check
+    const extraction = await extractAssignmentFromMessage(body);
+
+    if (!extraction || !extraction.is_important) {
+      console.log(`[ProactiveAlert] Message ${messageId} is not important — staying silent.`);
+      return;
+    }
+
+    console.log(`[ProactiveAlert] IMPORTANT message detected! course=${extraction.course_code}, deadline=${extraction.deadline_text}`);
+
+    // Step 2: Resolve sender display name
+    // Try contacts table first (by normalised phone number)
+    const senderPhone = actualSender.replace(/@.*$/, '').replace(/\D/g, '');
+    const { data: contactRows } = await supabase
+      .from('contacts')
+      .select('display_name, role')
+      .limit(20);
+
+    let resolvedSender = senderName || senderPhone; // fallback
+    if (contactRows && contactRows.length > 0) {
+      const match = contactRows.find(c => {
+        const cp = (c.phone_number || '').replace(/\D/g, '');
+        return cp && cp === senderPhone;
+      });
+      if (match) {
+        resolvedSender = match.role
+          ? `${match.display_name} (${match.role})`
+          : match.display_name;
+      }
+    }
+
+    // Step 3: Resolve group human-readable title
+    const { data: groupRow } = await supabase
+      .from('monitored_chats')
+      .select('name')
+      .eq('chat_id', chatId)
+      .single();
+
+    // group name is stored in the 'name' column — but for monitored groups it may be a JSON blob
+    // for user_preferences row it is JSON; for group rows it is plain text title
+    let groupTitle = chatId; // fallback
+    if (groupRow && groupRow.name) {
+      try {
+        // If it parses as JSON it's the user_preferences row — shouldn't happen here but guard anyway
+        JSON.parse(groupRow.name);
+      } catch {
+        // Plain text — this is the group title
+        groupTitle = groupRow.name;
+      }
+    }
+
+    // Step 4: Fetch user's target_chat (where to send the DM)
+    const { data: prefRow } = await supabase
+      .from('monitored_chats')
+      .select('name')
+      .eq('chat_id', 'user_preferences')
+      .maybeSingle();
+
+    let targetChat = null;
+    if (prefRow && prefRow.name) {
+      try {
+        const prefs = JSON.parse(prefRow.name);
+        targetChat = prefs.target_chat || null;
+      } catch {}
+    }
+
+    if (!targetChat) {
+      console.warn('[ProactiveAlert] No target_chat in user_preferences — cannot DM user. Skipping.');
+      return;
+    }
+
+    // Step 5: Build the DM text
+    // Keep it clean: who, where, verbatim quote, proactive offer.
+    // No emojis, no bullets, double newlines between sentences.
+    const verbatimQuote = extraction.quote || body;
+    const deadlineNote = extraction.deadline_text
+      ? `\n\nDeadline: ${extraction.deadline_text}`
+      : '';
+
+    const alertText =
+      `${resolvedSender} just posted in ${groupTitle}:\n\n` +
+      `"${verbatimQuote}"` +
+      `${deadlineNote}\n\n` +
+      `Would you like me to track this and set reminders for you?`;
+
+    // Step 6: Send DM
+    console.log(`[ProactiveAlert] Sending alert to ${targetChat}...`);
+    await sendTextMessage(targetChat, alertText);
+    console.log(`[ProactiveAlert] Alert sent successfully for message ${messageId}.`);
+
+  } catch (err) {
+    // Never crash the server over a background alert failure
+    console.error('[ProactiveAlert] Pipeline error:', err.message);
+  }
+}
 
